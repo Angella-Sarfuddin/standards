@@ -8,11 +8,16 @@ REAFFIRMATION_RE = re.compile(
     re.IGNORECASE,
 )
 WITHDRAWAL_RE = re.compile(
-    r"\s*/\s*(?:WITHDRAWN|OBSOLETE|SUPERSEDED)\s*$",
+    r"(?:\s*/\s*|\s*\(\s*)(?:WITHDRAWN|OBSOLETE|SUPERSEDED)\s*\)?\s*$",
     re.IGNORECASE,
 )
 LANGUAGE_SUFFIX_RE = re.compile(
     r"\s*(?:/\s*EN\s*[-/]\s*FR|\(\s*EN\s*[-/]\s*FR\s*\))\s*$",
+    re.IGNORECASE,
+)
+CORRIGENDUM_RE = re.compile(
+    r"(?:/|\s+)(?:COR(?:R)?(?:IGENDUM)?)\.?\s*:?\s*\d+"
+    r"(?:\s*:\s*(?:19|20)\d{2})?\s*$",
     re.IGNORECASE,
 )
 SERIES_SUFFIX_RE = re.compile(
@@ -51,7 +56,7 @@ DESIGNATION_TOKENS = {
 
 SDO_IDENTIFIER_PREFIX_ALIASES = {
     "ISO": ("ISO/IEC", "ISO/TS", "ISO/TR"),
-    "BSI": ("BS", "BS EN", "BS EN ISO", "PD", "PD CEN", "PD CEN/TR"),
+    "BSI": ("BS", "BS EN", "BS EN ISO", "EN", "PD", "PD CEN", "PD CEN/TR"),
     "BIS": ("IS", "BIS"),
     "IS": ("IS", "BIS"),
 }
@@ -91,8 +96,59 @@ def normalize_identity_core(value: str) -> str:
 
 
 def identity_core_sql_pattern(value: str) -> str:
-    """Keep identifier characters literal and wildcard only separators."""
-    return re.sub(r"[^A-Z0-9]+", "%", normalize_tokens(value)).strip("%")
+    """Keep identifier characters literal and wildcard only separators.
+
+    Letter/digit boundaries also become optional wildcards so compact forms
+    such as ``D1250`` match spaced catalogue values like ``D 1250``.
+    """
+    pattern = re.sub(r"[^A-Z0-9]+", "%", normalize_tokens(value)).strip("%")
+    pattern = re.sub(r"([A-Z])(\d)", r"\1%\2", pattern)
+    pattern = re.sub(r"(\d)([A-Z])", r"\1%\2", pattern)
+    return pattern
+
+
+def _spacing_variants(value: str) -> List[str]:
+    """Generate compact/spaced letter-digit forms of an identifier body."""
+    value = normalize_tokens(value)
+    if not value:
+        return []
+
+    variants = [value]
+    variants.append(re.sub(r"([A-Z])(\d)", r"\1 \2", value))
+    variants.append(re.sub(r"([A-Z])\s+(\d)", r"\1\2", value))
+    return list(dict.fromkeys(item for item in variants if item))
+
+
+def identity_index_cores(sdo_name: str, core: str) -> List[str]:
+    """Cores under which a candidate should be indexed for discovery joins."""
+    normalized = normalize_identity_core(core)
+    if not normalized:
+        return []
+
+    cores = [normalized]
+    if normalize_tokens(sdo_name) == "JIS":
+        department = re.fullmatch(r"([A-Z]+)(\d+)", normalized)
+        if department:
+            cores.append(department.group(2))
+    return list(dict.fromkeys(cores))
+
+
+def _jis_optional_department_match(
+    sdo_name: str,
+    requested_core: str,
+    candidate_core: str,
+) -> bool:
+    """Allow bare JIS numbers to match department-letter catalogue ids.
+
+    Example: request ``0555`` matches stored ``K0555`` / ``G0555``. Year and
+    qualifier checks in ``identity_matches`` still apply afterward.
+    """
+    if normalize_tokens(sdo_name) != "JIS":
+        return False
+    if not requested_core.isdigit():
+        return False
+    department = re.fullmatch(r"([A-Z]+)(\d+)", candidate_core)
+    return bool(department and department.group(2) == requested_core)
 
 
 # Continuations allowed after a core token in LIKE predicates. Digits are not
@@ -277,6 +333,10 @@ def extract_year(value: str) -> Tuple[str, Optional[int]]:
         return value, None
     year = int(match.group(1))
     body = value[:match.start()].strip(" :.,-()[]{}")
+    # Catalogue numbers that are themselves 19xx/20xx (API 2003, IS 1905,
+    # RP 2009) must keep those digits as identity, not edition metadata.
+    if not re.search(r"\d", body):
+        return value, None
     return body, year
 
 
@@ -346,6 +406,7 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
 
     value = WITHDRAWAL_RE.sub("", value).rstrip()
     value = LANGUAGE_SUFFIX_RE.sub("", value).rstrip()
+    value = CORRIGENDUM_RE.sub("", value).rstrip()
     series_marker = bool(SERIES_SUFFIX_RE.search(value))
     if series_marker:
         value = SERIES_SUFFIX_RE.sub("", value).rstrip()
@@ -456,8 +517,8 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         qualifier = "SERIES"
         family_lookup = True
 
-    if sdo == "ASME" and re.match(r"^B\d", core_number, re.IGNORECASE):
-        core_number = core_number[1:]
+    if sdo == "ASME" and re.match(r"^B\s*\d", core_number, re.IGNORECASE):
+        core_number = re.sub(r"^B\s*", "", core_number, flags=re.IGNORECASE)
 
     if (
         sdo == "MSS"
@@ -483,10 +544,16 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
 
 
 def _full_variants(sdo: str, body: str) -> List[str]:
-    body_variants = _qualifier_variants(body)
+    body_variants = []
+    for item in _qualifier_variants(body):
+        body_variants.extend(_spacing_variants(item))
+
     variants = []
     prefixes = sdo_identifier_prefixes(sdo)
     for item in body_variants:
+        # Unprefixed body helps rows stored without an SDO prefix (e.g. SP 72)
+        # and spaced ASTM forms (D 1250 ...) hit exact/display lookups.
+        variants.append(normalize_tokens(item))
         for prefix in prefixes:
             variants.append(normalize_tokens(f"{prefix} {item}"))
     return list(dict.fromkeys(v for v in variants if v))
@@ -520,7 +587,12 @@ def identity_matches(
         if not candidate_core.startswith(requested_core):
             return False
     elif requested_core != candidate_core:
-        return False
+        if not _jis_optional_department_match(
+            requested.get("sdo_name"),
+            requested_core,
+            candidate_core,
+        ):
+            return False
 
     requested_qualifier = requested.get("qualifier")
     candidate_qualifier = candidate.get("qualifier")

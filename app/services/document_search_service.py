@@ -17,6 +17,7 @@ from app.utils.standard_identity import (
     normalize_identity_core,
     sdo_identifier_prefixes,
     identity_matches,
+    identity_index_cores,
 )
 
 
@@ -880,14 +881,18 @@ class DocumentSearchService:
                     if not candidate_core:
                         continue
 
-                    key = (
-                        candidate.sdo_id,
-                        normalize_tokens(sdo_name),
+                    for index_core in identity_index_cores(
+                        sdo_name,
                         candidate_core,
-                    )
-                    index.setdefault(key, {})[
-                        candidate.id
-                    ] = candidate
+                    ):
+                        key = (
+                            candidate.sdo_id,
+                            normalize_tokens(sdo_name),
+                            index_core,
+                        )
+                        index.setdefault(key, {})[
+                            candidate.id
+                        ] = candidate
 
         return index
 

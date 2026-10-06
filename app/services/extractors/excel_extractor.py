@@ -1,6 +1,5 @@
 import re
 from dataclasses import dataclass
-from typing import Any
 
 import pandas as pd
 
@@ -15,28 +14,13 @@ class ColumnCandidate:
 
 
 class ExcelExtractor(BaseExtractor):
-    """
-    Generic Excel ingestion layer.
-
-    The extractor does NOT depend on a particular workbook/sheet name.
-    It inspects sheets, detects the most useful table structure, classifies
-    columns by meaning + values, and emits canonical search rows.
-
-    Canonical row:
-        {
-            "sdo_name": "ISO",
-            "displaystdno": "7010:2019",
-            "source_sheet": "Customer Requirements",
-            "source_row": 12,
-            "source_data": {...}
-        }
+    """Generic Excel ingestion: detect table shape, classify columns, emit
+    canonical ``{sdo_name, displaystdno}`` search rows.
     """
 
     HEADER_SCAN_ROWS = 15
     MIN_HEADER_SCORE = 2.0
 
-    # Ordered from most specific to generic. Matching is semantic rather than
-    # tied to one exact customer template.
     STANDARD_ALIASES = {
         "requested_standard": {
             "requested standard": 12,
@@ -61,6 +45,13 @@ class ExcelExtractor(BaseExtractor):
             "reference number": 5,
             "reference no": 5,
             "reference": 3,
+            "displaystdno": 11,
+            "display stdno": 11,
+            "display std no": 11,
+            "display standard no": 11,
+            "display standard number": 11,
+            "stdno": 8,
+            "std_no": 8,
             "standard": 5,
             "standards": 5,
             "code": 4,
@@ -114,7 +105,6 @@ class ExcelExtractor(BaseExtractor):
         "description",
         "title",
         "title of the standard",
-        "standard name",
         "price",
         "member price",
         "nonmember price",
@@ -164,10 +154,7 @@ class ExcelExtractor(BaseExtractor):
         return self._deduplicate_representations(rows)
 
     def _deduplicate_representations(self, rows):
-        """Collapse the same standard when it appears in different workbook
-        representations, while preserving repeated rows inside one actual
-        input table.
-        """
+        
         kept = []
         seen_cross_source = {}
 
@@ -190,13 +177,10 @@ class ExcelExtractor(BaseExtractor):
 
             previous_source, previous_index = previous
 
-            # Same source column = genuine repeated input row; preserve it.
             if previous_source == source:
                 kept.append(row)
                 continue
 
-            # Different representations of the same standard = one canonical
-            # row. Prefer the non-reference/requested representation.
             previous_is_reference = "located" in str(previous_source[1]).lower() if previous_source[1] else False
             current_is_reference = "located" in str(source[1]).lower() if source[1] else False
 
@@ -215,15 +199,6 @@ class ExcelExtractor(BaseExtractor):
         if raw.empty:
             return {"sheet": sheet_name, "score": 0, "rows": []}
 
-        # Some workbooks are category matrices rather than conventional
-        # tables. Example:
-        #
-        # AWWA: 3 Standards | ASHRAE: 6 Standards | IEC: 105 Standards
-        # AWWA C950          | ASHRAE 15-2024       | IEC 60034-1:2026
-        #
-        # Treat each populated cell under those category headers as an
-        # independent input. This is generic and does not depend on the
-        # worksheet being called "Sheet1".
         category_rows = self._extract_category_matrix(sheet_name, raw)
         if category_rows:
             return {
@@ -272,8 +247,6 @@ class ExcelExtractor(BaseExtractor):
                         "declared_count": int(match.group("count")),
                     }
 
-            # Require at least two category headers so an ordinary cell
-            # mentioning "3 standards" is not mistaken for a matrix.
             if len(found) >= 2:
                 header_row = row_index
                 categories = found
@@ -346,7 +319,6 @@ class ExcelExtractor(BaseExtractor):
                 if value in self.IGNORED_COLUMNS:
                     score += 0.5
 
-            # Headers generally contain multiple different textual labels.
             if len(set(values)) >= 2:
                 score += 1
 
@@ -384,16 +356,27 @@ class ExcelExtractor(BaseExtractor):
         if dataframe.empty:
             return []
 
-        columns = list(dataframe.columns)
         standard_candidates = self._classify_standard_columns(dataframe)
         sdo_candidates = self._classify_sdo_columns(dataframe)
 
         if not standard_candidates:
             return self._extract_unstructured_rows(sheet_name, dataframe)
 
-        # Prefer a requested/input column over a located/result/reference column.
-        standard_candidates.sort(key=lambda item: item.score, reverse=True)
-        primary = standard_candidates[0]
+        # Never treat the detected SDO/organization column as the standard
+        # number column (e.g. test_10000.xlsx: "sdo name" + "displaystdno").
+        sdo_column_names = {
+            candidate.name for candidate in sdo_candidates[:1]
+        }
+        usable_standard_candidates = [
+            candidate
+            for candidate in standard_candidates
+            if candidate.name not in sdo_column_names
+        ] or standard_candidates
+
+        usable_standard_candidates.sort(
+            key=lambda item: item.score,
+            reverse=True,
+        )
 
         rows = []
 
@@ -404,43 +387,60 @@ class ExcelExtractor(BaseExtractor):
                 if self._safe_value(value) != ""
             }
 
-            # Ignore rows which contain no meaningful values at all.
             if not source_data:
-                continue
-
-            standard_value = self._safe_value(record.get(primary.name))
-
-            # Do not silently turn a reference/result column into the primary
-            # request when the requested column is blank. Blank requested rows
-            # are handled separately by the secondary-block detector below.
-            if not standard_value:
                 continue
 
             sdo_value = ""
             if sdo_candidates:
-                sdo_value = self._safe_value(record.get(sdo_candidates[0].name))
+                sdo_value = self._safe_value(
+                    record.get(sdo_candidates[0].name)
+                )
 
-            parsed = self._parse_standard_value(standard_value, sdo_value)
+            parsed = None
+            primary_name = usable_standard_candidates[0].name
+
+            for candidate in usable_standard_candidates:
+                standard_value = self._safe_value(
+                    record.get(candidate.name)
+                )
+                if not standard_value:
+                    continue
+
+                candidate_parsed = self._parse_standard_value(
+                    standard_value,
+                    sdo_value,
+                )
+                if self._is_usable_parse(candidate_parsed):
+                    parsed = candidate_parsed
+                    primary_name = candidate.name
+                    break
+
             if not parsed:
-                # The row may still contain the SDO and standard in separate
-                # fields or a messy text value.
                 parsed = self._parse_row_text(record.tolist())
 
-            if not parsed:
+            if not self._is_usable_parse(parsed):
                 continue
 
             rows.append({
                 **parsed,
                 "source_sheet": sheet_name,
                 "source_row": offset,
-                "source_column": primary.name,
+                "source_column": primary_name,
                 "source_data": source_data,
             })
 
-        # Reference/result columns are deliberately NOT promoted to input
-        # rows when a requested/input standard column exists. A located or
-        # matched standard is evidence about the request, not another request.
         return rows
+
+    @staticmethod
+    def _is_usable_parse(parsed):
+        """Reject empty parses and SDO-only results (display == SDO)."""
+        if not parsed:
+            return False
+        sdo = str(parsed.get("sdo_name") or "").strip()
+        number = str(parsed.get("displaystdno") or "").strip()
+        if not sdo or not number:
+            return False
+        return sdo.upper() != number.upper()
 
     # ------------------------------------------------------------------
     # Unstructured sheets / vertical lists / category layouts
@@ -506,8 +506,12 @@ class ExcelExtractor(BaseExtractor):
                 ) / len(values)
                 score += standard_ratio * 12
 
-                # A reference/result column is weaker if another requested
-                # column already has a stronger semantic score.
+                sdo_ratio = sum(
+                    1 for value in values
+                    if self._looks_like_sdo(value)
+                ) / len(values)
+                if sdo_ratio >= 0.7 and standard_ratio < 0.3:
+                    score -= 15
                 if "located" in normalized or "matched" in normalized:
                     score -= 8
 
@@ -550,11 +554,12 @@ class ExcelExtractor(BaseExtractor):
 
         explicit_sdo = self._normalize_sdo(sdo_value)
 
-        # Category/SDO columns sometimes contain values such as
-        # ANSI/ASHRAE 15-2024, ANSI/ASHRAE/IES 90.1-2025, or
-        # ANSI/NACE MR0103. When the category already tells us the SDO,
-        # strip only the publishing wrappers around that SDO.
-        if explicit_sdo:
+        if (
+            explicit_sdo
+            and not standard_value.upper().startswith(
+                explicit_sdo.upper() + "/"
+            )
+        ):
             wrapper = re.match(
                 rf"(?i)(?:[A-Z][A-Z0-9]{{1,10}}/)*"
                 rf"{re.escape(explicit_sdo)}"
@@ -568,9 +573,6 @@ class ExcelExtractor(BaseExtractor):
                 ).strip()
 
         embedded_sdo = self._extract_sdo(standard_value)
-
-        # Prefer a compound SDO embedded in the value when the explicit
-        # category is only its shorter parent (for example ISO + ISO/IEC).
         if embedded_sdo and (
             not explicit_sdo
             or standard_value.upper().startswith(embedded_sdo.upper())
@@ -591,12 +593,10 @@ class ExcelExtractor(BaseExtractor):
             flags=re.IGNORECASE,
         ).strip()
 
-        # Some inferred SDOs are compound prefixes such as BS EN or TIA/EIA.
         if not number:
             number = standard_value[len(sdo):].lstrip(" :.-")
 
         if not number:
-            # A bare organization/family such as TEMA can still be searched.
             number = standard_value
 
         number = number.split(";", 1)[0].strip()
@@ -611,6 +611,9 @@ class ExcelExtractor(BaseExtractor):
         if not self._looks_like_identifier(number):
             return None
 
+        if number.upper() == sdo.upper():
+            return None
+
         return {
             "sdo_name": sdo,
             "displaystdno": number,
@@ -622,16 +625,14 @@ class ExcelExtractor(BaseExtractor):
         if not value:
             return ""
 
-        # Compound publishing prefixes commonly seen in standards data.
+        
         compound = re.match(r"^([A-Za-z]{1,6}(?:[/.-][A-Za-z]{1,8})+)\b", value)
         if compound:
             prefix = compound.group(1).upper()
             if re.search(r"\d", value[compound.end():]):
                 return prefix
 
-        # Generic unknown SDO: take leading alphabetic token(s) immediately
-        # before the first numeric/identifier token. This intentionally avoids
-        # requiring a hardcoded global list of standards bodies.
+      
         tokens = value.split()
         if not tokens:
             return ""
@@ -662,9 +663,6 @@ class ExcelExtractor(BaseExtractor):
         if not text:
             return None
 
-        # Search for every embedded SDO and choose the first plausible
-        # identifier. This is deliberately conservative: one row becomes one
-        # request unless the row is clearly a list-style row.
         matches = list(self.SDO_PATTERN.finditer(text))
         for match in matches:
             sdo = self._normalize_sdo(match.group(1))
@@ -684,13 +682,7 @@ class ExcelExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     def _select_input_sheets(self, candidates):
-        """Select the workbook's primary input table(s).
-
-        We intentionally do not concatenate every sheet. A workbook commonly
-        contains a main customer list plus summaries, lookup sheets, or
-        previous search results. Prefer the table with the strongest requested
-        standard-column signal and then use row count as a secondary signal.
-        """
+       
         ranked = sorted(candidates, key=lambda item: item["score"], reverse=True)
         if not ranked:
             return []
@@ -707,12 +699,10 @@ class ExcelExtractor(BaseExtractor):
             candidate_keys = self._row_keys(candidate["rows"])
             overlap = len(primary_keys & candidate_keys) / max(1, len(candidate_keys))
 
-            # Do not merge a smaller duplicate/reference representation.
+            
             if overlap >= 0.45:
                 continue
 
-            # A second genuinely independent input table can be retained when
-            # it has a strong score of its own.
             if candidate["score"] >= primary_score * 0.90:
                 selected.append(candidate)
 
@@ -747,8 +737,7 @@ class ExcelExtractor(BaseExtractor):
                 reference_penalty = max(reference_penalty, abs(candidate.score))
 
         density = len(rows) / max(1, len(dataframe))
-        # Row count is useful because duplicate summary sheets are often much
-        # smaller than the real input table.
+      
         row_bonus = min(len(dataframe), 500) * 0.12
 
         return (
@@ -795,9 +784,7 @@ class ExcelExtractor(BaseExtractor):
         match = cls.SDO_PATTERN.search(value)
         if match:
             return match.group(1).upper()
-        # When the workbook explicitly provides an SDO column, accept unknown
-        # standards bodies instead of restricting the parser to a hardcoded
-        # global list.
+       
         if re.fullmatch(r"[A-Z][A-Z0-9&./ -]{0,30}", value):
             return value
         return ""
@@ -817,22 +804,30 @@ class ExcelExtractor(BaseExtractor):
         value = cls._clean_text(value)
         if not value:
             return False
-        if cls.SDO_PATTERN.search(value):
+
+   
+        if cls._looks_like_sdo(value):
+            return False
+
+        if cls.SDO_PATTERN.search(value) and re.search(r"\d", value):
             return True
         if re.search(r"\d", value) and cls._infer_sdo_from_identifier(value):
             return True
-        # Families such as ASHRAE HANDBOOK can be meaningful standards input
-        # even without a numeric designation.
-        first = value.split()[0].upper() if value.split() else ""
-        return first in cls.KNOWN_SDOS and len(value.split()) <= 4
+
+        tokens = value.split()
+        first = tokens[0].upper() if tokens else ""
+        return (
+            first in cls.KNOWN_SDOS
+            and 2 <= len(tokens) <= 6
+            and not cls._looks_like_sdo(value)
+        )
 
     @staticmethod
     def _looks_like_identifier(value):
         value = str(value).strip()
         if not re.search(r"\d", value):
             return bool(value and len(value.split()) <= 12 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._:/+()&,-]*", value))
-        # Allow compound identifiers, spaces, slashes, hyphens, colons,
-        # parentheses and common edition markers.
+    
         return bool(re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9 ./:_()&+,\-]*",
             value,

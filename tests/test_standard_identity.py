@@ -478,6 +478,77 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
+    def test_year_like_catalogue_numbers_keep_identity_core(self):
+        for sdo, requested, candidate in (
+            ("API", "2003", "API RP 2003 : 2015 (R2020)"),
+            ("API", "API 2009", "API RP 2009 : 2022"),
+            ("IS", "1905", "IS 1905 : 1987"),
+        ):
+            with self.subTest(requested=requested):
+                parsed = parse_identity(sdo, requested)
+                self.assertTrue(parsed["core_number"])
+                self.assertIsNone(parsed["year"])
+                self.assertTrue(self.matches(sdo, requested, candidate))
+
+    def test_asme_b_prefix_allows_spaced_form(self):
+        self.assertTrue(
+            self.matches("ASME", "B 31.11", "ASME B31.11:2002")
+        )
+
+    def test_parenthetical_withdrawal_is_stripped(self):
+        self.assertTrue(
+            self.matches(
+                "BS",
+                "1501 PT 1 (WITHDRAWN)",
+                "BS 1501-1:1980",
+            )
+        )
+
+    def test_corrigendum_suffix_is_not_part_of_identity(self):
+        parsed = parse_identity("ISO", "6974-1 CORR. 1")
+        self.assertEqual(parsed["core_number"], "6974")
+        self.assertEqual(parsed["qualifier"], "PART:1")
+        self.assertTrue(
+            self.matches(
+                "ISO",
+                "6974-1 CORR. 1",
+                "ISO 6974-1:2012/Cor 1:2012",
+            )
+        )
+
+    def test_jis_optional_department_letter_matches(self):
+        self.assertTrue(
+            self.matches("JIS", "0555:1995", "JIS K 0555:1995")
+        )
+        self.assertFalse(
+            self.matches("JIS", "0555:1995", "JIS G 0555:2023")
+        )
+
+    def test_bsi_en_prefix_strips_to_root_number(self):
+        parsed = parse_identity("BSI", "EN 1090")
+        self.assertEqual(parsed["core_number"], "1090")
+        self.assertIn("BS EN 1090", parsed["variants"])
+        self.assertNotIn("BS EN EN 1090", parsed["variants"])
+
+    def test_unprefixed_and_spaced_display_variants(self):
+        api = parse_identity("IS", "SP 72")
+        self.assertIn("SP 72", api["variants"])
+
+        astm = parse_identity(
+            "ASTM",
+            "D1250 VOL VIII TAB 53B & 54B",
+        )
+        self.assertIn(
+            "ASTM D 1250 VOL VIII TAB 53B & 54B",
+            astm["variants"],
+        )
+
+    def test_letter_digit_sql_pattern_allows_optional_space(self):
+        self.assertEqual(
+            identity_core_sql_pattern("D1250"),
+            "D%1250",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
