@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 
@@ -12,6 +12,12 @@ from app.routes.document_routes import router as document_router
 app = FastAPI(
     title="Standards Intelligence Backend"
 )
+
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Send browsers that open the API host to the interactive docs."""
+    return RedirectResponse(url="/docs")
 
 
 @app.exception_handler(OperationalError)
@@ -38,10 +44,7 @@ async def handle_database_operational_error(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

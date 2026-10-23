@@ -48,7 +48,7 @@ npm install
 npm run dev
 ```
 
-The frontend defaults to `http://127.0.0.1:8000` for the API. To use another backend URL, copy `frontend/.env.example` to `frontend/.env.local`, set `VITE_API_BASE_URL`, and restart Vite. The backend CORS configuration currently permits the Vite development origins on localhost and 127.0.0.1, port 5173.
+The frontend calls `/api` on the same origin as the page. In development, Vite proxies that path to `http://127.0.0.1:8000`, so the UI works over both HTTP and HTTPS. To point at a different API host, copy `frontend/.env.example` to `frontend/.env.local`, set `VITE_API_BASE_URL`, and restart Vite. Direct browser calls are allowed from `http` and `https` origins on localhost and 127.0.0.1.
 
 Available frontend scripts are `npm run dev`, `npm run build`, `npm run lint`, and `npm run preview`.
 
