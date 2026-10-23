@@ -1,0 +1,689 @@
+{
+  "prepared_rows": [
+    {
+      "sdo_name": "ISO",
+      "requested_sdo_name": "ISO",
+      "search_sdo_name": "ISO",
+      "displaystdno": "ISO 17025:2017",
+      "result_displaystdno": "ISO 17025:2017",
+      "has_revision_or_amendment": false,
+      "full_display_number": "ISO 17025:2017",
+      "sdo_id": 1,
+      "identity": {
+        "sdo_name": "ISO",
+        "body": "17025",
+        "designation": null,
+        "core": "17025",
+        "core_number": "17025",
+        "core_number_pattern": "17025",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": 2017,
+        "full_base": "ISO 17025",
+        "identifier_prefix": "ISO",
+        "variants": [
+          "17025",
+          "ISO 17025",
+          "ISO/IEC 17025",
+          "ISO/TS 17025",
+          "ISO/TR 17025"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        1,
+        "17025",
+        null,
+        2017,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        2,
+        "ISO 17025:2017"
+      ]
+    },
+    {
+      "sdo_name": "ISO",
+      "requested_sdo_name": "ISO",
+      "search_sdo_name": "ISO",
+      "displaystdno": "ISO 17025:2017",
+      "result_displaystdno": "ISO 17025:2017",
+      "has_revision_or_amendment": false,
+      "full_display_number": "ISO 17025:2017",
+      "sdo_id": 1,
+      "identity": {
+        "sdo_name": "ISO",
+        "body": "17025",
+        "designation": null,
+        "core": "17025",
+        "core_number": "17025",
+        "core_number_pattern": "17025",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": 2017,
+        "full_base": "ISO 17025",
+        "identifier_prefix": "ISO",
+        "variants": [
+          "17025",
+          "ISO 17025",
+          "ISO/IEC 17025",
+          "ISO/TS 17025",
+          "ISO/TR 17025"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        1,
+        "17025",
+        null,
+        2017,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        3,
+        "ISO 17025:2017"
+      ]
+    },
+    {
+      "sdo_name": "BIS",
+      "requested_sdo_name": "BIS",
+      "search_sdo_name": "BIS",
+      "displaystdno": "IS 2099 Rev 2, 1986",
+      "result_displaystdno": "IS 2099 Rev 2, 1986",
+      "has_revision_or_amendment": false,
+      "full_display_number": "IS 2099 Rev 2, 1986",
+      "sdo_id": 2,
+      "identity": {
+        "sdo_name": "BIS",
+        "body": "2099",
+        "designation": null,
+        "core": "2099",
+        "core_number": "2099",
+        "core_number_pattern": "2099",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": null,
+        "full_base": "BIS 2099",
+        "identifier_prefix": "IS",
+        "variants": [
+          "2099",
+          "BIS 2099",
+          "BIS IS/IEC 2099",
+          "BIS IS IEC 2099",
+          "BIS IEC 2099",
+          "IS/IEC 2099",
+          "IS IEC 2099",
+          "IS 2099"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        2,
+        "2099",
+        null,
+        null,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        4,
+        "IS 2099 REV 2,1986"
+      ]
+    },
+    {
+      "sdo_name": "IEC",
+      "requested_sdo_name": "IEC",
+      "search_sdo_name": "IEC",
+      "displaystdno": "IEC 60034-1:2022 AMD 1",
+      "result_displaystdno": "IEC 60034-1:2022",
+      "has_revision_or_amendment": false,
+      "full_display_number": "IEC 60034-1:2022 AMD 1",
+      "sdo_id": 3,
+      "identity": {
+        "sdo_name": "IEC",
+        "body": "60034-1",
+        "designation": null,
+        "core": "60034-1",
+        "core_number": "60034",
+        "core_number_pattern": "60034",
+        "qualifier": "PART:1",
+        "family_lookup": false,
+        "year": 2022,
+        "full_base": "IEC 60034-1",
+        "identifier_prefix": "IEC",
+        "variants": [
+          "60034-1",
+          "IEC 60034-1",
+          "ISO/IEC 60034-1",
+          "ISO/TS 60034-1",
+          "ISO/TR 60034-1"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        3,
+        "60034",
+        "PART:1",
+        2022,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        5,
+        "IEC 60034-1:2022 AMD 1"
+      ]
+    },
+    {
+      "sdo_name": "SP",
+      "requested_sdo_name": "SP",
+      "search_sdo_name": "API",
+      "displaystdno": "0104",
+      "result_displaystdno": "0104",
+      "has_revision_or_amendment": false,
+      "full_display_number": "API SP 0104",
+      "sdo_id": 4,
+      "identity": {
+        "sdo_name": "API",
+        "body": "SP 0104",
+        "designation": "SP",
+        "core": "0104",
+        "core_number": "0104",
+        "core_number_pattern": "0104",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": null,
+        "full_base": "API SP 0104",
+        "identifier_prefix": "SP",
+        "variants": [
+          "SP 0104",
+          "API SP 0104",
+          "SP0104",
+          "API SP0104"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        4,
+        "0104",
+        null,
+        null,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        6,
+        "0104"
+      ]
+    },
+    {
+      "sdo_name": "SP",
+      "requested_sdo_name": "SP",
+      "search_sdo_name": "API",
+      "displaystdno": "0104",
+      "result_displaystdno": "0104",
+      "has_revision_or_amendment": false,
+      "full_display_number": "API SP 0104",
+      "sdo_id": 4,
+      "identity": {
+        "sdo_name": "API",
+        "body": "SP 0104",
+        "designation": "SP",
+        "core": "0104",
+        "core_number": "0104",
+        "core_number_pattern": "0104",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": null,
+        "full_base": "API SP 0104",
+        "identifier_prefix": "SP",
+        "variants": [
+          "SP 0104",
+          "API SP 0104",
+          "SP0104",
+          "API SP0104"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        4,
+        "0104",
+        null,
+        null,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        7,
+        "0104"
+      ]
+    },
+    {
+      "sdo_name": "SP",
+      "requested_sdo_name": "SP",
+      "search_sdo_name": "SP",
+      "displaystdno": "75",
+      "result_displaystdno": "75",
+      "has_revision_or_amendment": false,
+      "full_display_number": "SP 75",
+      "sdo_id": null,
+      "identity": {
+        "sdo_name": "SP",
+        "body": "75",
+        "designation": null,
+        "core": "75",
+        "core_number": "75",
+        "core_number_pattern": "75",
+        "qualifier": null,
+        "family_lookup": false,
+        "year": null,
+        "full_base": "SP 75",
+        "identifier_prefix": "SP",
+        "variants": [
+          "75",
+          "SP 75"
+        ]
+      },
+      "include_subsections": false,
+      "expand_family": false,
+      "request_key": [
+        "SP",
+        "75",
+        null,
+        null,
+        false,
+        false
+      ],
+      "source_request_identity": [
+        "sample.xlsx",
+        8,
+        "75"
+      ]
+    },
+    {
+      "sdo_name": "IEC",
+      "requested_sdo_name": "IEC",
+      "search_sdo_name": "IEC",
+      "displaystdno": "IEC 62443 Part 1",
+      "result_displaystdno": "IEC 62443 Part 1",
+      "has_revision_or_amendment": false,
+      "full_display_number": "IEC 62443 Part 1",
+      "sdo_id": 3,
+      "identity": {
+        "sdo_name": "IEC",
+        "body": "62443 PART 1",
+        "designation": null,
+        "core": "62443 PART 1",
+        "core_number": "62443",
+        "core_number_pattern": "62443",
+        "qualifier": "PART:1",
+        "family_lookup": true,
+        "year": null,
+        "full_base": "IEC 62443 PART 1",
+        "identifier_prefix": "IEC",
+        "variants": [
+          "62443 PART 1",
+          "IEC 62443 PART 1",
+          "ISO/IEC 62443 PART 1",
+          "ISO/TS 62443 PART 1",
+          "ISO/TR 62443 PART 1",
+          "62443 PART1",
+          "IEC 62443 PART1",
+          "ISO/IEC 62443 PART1",
+          "ISO/TS 62443 PART1",
+          "ISO/TR 62443 PART1",
+          "62443-1",
+          "IEC 62443-1",
+          "ISO/IEC 62443-1",
+          "ISO/TS 62443-1",
+          "ISO/TR 62443-1",
+          "62443 1",
+          "IEC 62443 1",
+          "ISO/IEC 62443 1",
+          "ISO/TS 62443 1",
+          "ISO/TR 62443 1",
+          "62443.1",
+          "IEC 62443.1",
+          "ISO/IEC 62443.1",
+          "ISO/TS 62443.1",
+          "ISO/TR 62443.1"
+        ]
+      },
+      "include_subsections": true,
+      "expand_family": true,
+      "request_key": [
+        3,
+        "62443",
+        "PART:1",
+        null,
+        true,
+        true
+      ],
+      "source_request_identity": [
+        "Sheet A",
+        9,
+        "IEC 62443 PART 1"
+      ]
+    }
+  ],
+  "callback_trace": [
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "ISO",
+        "ISO 17025:2017"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "ISO",
+          "core_number": "17025",
+          "qualifier": null,
+          "year": 2017,
+          "identifier_prefix": "ISO",
+          "family_lookup": false
+        },
+        false
+      ],
+      "return": false
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        1,
+        "ISO",
+        {
+          "sdo_name": "ISO",
+          "core_number": "17025",
+          "qualifier": null,
+          "year": 2017,
+          "identifier_prefix": "ISO",
+          "family_lookup": false
+        }
+      ],
+      "return": [
+        1,
+        "17025",
+        null,
+        2017,
+        false
+      ]
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "ISO",
+        "ISO 17025:2017"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "BIS",
+        "IS 2099 Rev 2, 1986"
+      ],
+      "return": true
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "BIS",
+          "core_number": "2099",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "IS",
+          "family_lookup": false
+        },
+        false
+      ],
+      "return": false
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        2,
+        "BIS",
+        {
+          "sdo_name": "BIS",
+          "core_number": "2099",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "IS",
+          "family_lookup": false
+        }
+      ],
+      "return": [
+        2,
+        "2099",
+        null,
+        null,
+        false
+      ]
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "IEC",
+        "IEC 60034-1:2022 AMD 1"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "IEC",
+          "core_number": "60034",
+          "qualifier": "PART:1",
+          "year": 2022,
+          "identifier_prefix": "IEC",
+          "family_lookup": false
+        },
+        false
+      ],
+      "return": false
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        3,
+        "IEC",
+        {
+          "sdo_name": "IEC",
+          "core_number": "60034",
+          "qualifier": "PART:1",
+          "year": 2022,
+          "identifier_prefix": "IEC",
+          "family_lookup": false
+        }
+      ],
+      "return": [
+        3,
+        "60034",
+        "PART:1",
+        2022,
+        false
+      ]
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "SP",
+        "0104"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_infer_unique_catalog_sdo",
+      "args": [
+        "SP",
+        "0104"
+      ],
+      "return": [
+        "API",
+        4
+      ]
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "API",
+          "core_number": "0104",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "SP",
+          "family_lookup": false
+        },
+        false
+      ],
+      "return": false
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        4,
+        "API",
+        {
+          "sdo_name": "API",
+          "core_number": "0104",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "SP",
+          "family_lookup": false
+        }
+      ],
+      "return": [
+        4,
+        "0104",
+        null,
+        null,
+        false
+      ]
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "SP",
+        "0104"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "SP",
+        "75"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_infer_unique_catalog_sdo",
+      "args": [
+        "SP",
+        "75"
+      ],
+      "return": null
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "SP",
+          "core_number": "75",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "SP",
+          "family_lookup": false
+        },
+        false
+      ],
+      "return": false
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        null,
+        "SP",
+        {
+          "sdo_name": "SP",
+          "core_number": "75",
+          "qualifier": null,
+          "year": null,
+          "identifier_prefix": "SP",
+          "family_lookup": false
+        }
+      ],
+      "return": [
+        "SP",
+        "75",
+        null,
+        null,
+        false
+      ]
+    },
+    {
+      "callback": "_is_bis_revision_edition",
+      "args": [
+        "IEC",
+        "IEC 62443 Part 1"
+      ],
+      "return": false
+    },
+    {
+      "callback": "_should_expand_family",
+      "args": [
+        {
+          "sdo_name": "IEC",
+          "core_number": "62443",
+          "qualifier": "PART:1",
+          "year": null,
+          "identifier_prefix": "IEC",
+          "family_lookup": false
+        },
+        true
+      ],
+      "return": true
+    },
+    {
+      "callback": "_request_identity_key",
+      "args": [
+        3,
+        "IEC",
+        {
+          "sdo_name": "IEC",
+          "core_number": "62443",
+          "qualifier": "PART:1",
+          "year": null,
+          "identifier_prefix": "IEC",
+          "family_lookup": true
+        }
+      ],
+      "return": [
+        3,
+        "62443",
+        "PART:1",
+        null,
+        true
+      ]
+    }
+  ]
+}

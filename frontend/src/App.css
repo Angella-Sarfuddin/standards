@@ -467,6 +467,42 @@ button:disabled {
   border-top: 1px solid var(--border);
 }
 
+.quick-search-results {
+  display: flex;
+
+  flex-direction: column;
+}
+
+.quick-search-results .quick-result {
+  margin-top: 0;
+}
+
+.quick-result-title,
+.quick-result-detail {
+  grid-column: 1 / -1;
+
+  margin: 0;
+
+  color: var(--soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.quick-result-title {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.quick-result-empty {
+  margin-top: 17px;
+  padding-top: 16px;
+
+  color: var(--soft);
+  font-size: 12px;
+
+  border-top: 1px solid var(--border);
+}
+
 .quick-result div {
   display: flex;
 
@@ -1329,6 +1365,37 @@ button:disabled {
   font-size: 14px;
 }
 
+.export-actions {
+  gap: 10px;
+}
+
+.export-output-control {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.export-output-control select {
+  min-width: 205px;
+  height: 36px;
+  padding: 0 28px 0 10px;
+  border: 1px solid #dedee9;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 10px;
+  outline: none;
+}
+
+.export-output-control select:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px rgba(114, 87, 255, 0.1);
+}
+
 /* =========================================================
    DASHBOARD PANEL
    ========================================================= */
@@ -1499,6 +1566,18 @@ button:disabled {
   box-shadow:
     0 6px 20px
       rgba(30, 28, 59, 0.035);
+}
+
+.edition-update-note {
+  margin-top: 4px;
+  color: #8a5a00;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.updated-editions-metric {
+  border-color: #f0d9a8;
+  background: #fffaf0;
 }
 
 .dashboard-card-heading {

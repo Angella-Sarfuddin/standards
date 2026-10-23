@@ -1,10 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import axios from "axios";
 
 import {
   searchStandards,
-  exportSelectedStandards,
-} from "./services/api";
+  searchDocumentStandards,
+  exportFoundAndNotFoundBundle,
+  exportLatestYearStandards,
+  API_BASE_URL,
+} from "./api/index.js";
 
 import "./App.css";
 
@@ -24,6 +27,109 @@ const GROUPING_THRESHOLD = 25;
 const TABLE_PAGE_SIZE = 100;
 const EMPTY = "-";
 
+const getSeriesDesignation = (result) => {
+  const standard = result?.standard || {};
+  const candidates = [
+    result?.requested_standard,
+    standard.display_stdNo,
+    standard.standardno,
+    result?.displaystdno,
+    result?.raw_standard_expression,
+    result?.standard_expression?.raw,
+    result?.source_data?.displaystdno,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  return candidates.find((value) => /\bSER(?:IES)?\b/i.test(value));
+};
+
+const deduplicateResultRows = (results) => {
+  const seen = new Set();
+  return (results || []).filter((result) => {
+    const sdo = String(
+      result?.requested_sdo || result?.sdo_name || result?.sdo || ""
+    )
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    const request = String(result?.requested_standard || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
+    const standard = result?.standard || {};
+    const resolved =
+      standard.Standard_id ||
+      standard.id ||
+      standard.display_stdNo ||
+      standard.standardno ||
+      "";
+    const sourceIdentity = result?.source_row_identity;
+    const sourceSuffix = sourceIdentity
+      ? `:source:${JSON.stringify(sourceIdentity)}`
+      : "";
+    const key = result?.matched && result?.standard
+      ? `found:${sdo}:${request}:${String(resolved).toUpperCase()}${sourceSuffix}`
+      : `unmatched:${sdo}:${request}:${String(result?.status || "").toUpperCase()}:${String(result?.status_detail || "").toUpperCase()}${sourceSuffix}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+const expandSeriesResultsForExport = async (results) => {
+  const expanded = [];
+
+  for (const result of results || []) {
+    // A matched catalogue record can itself be a SERIES even when the
+    // customer requested a single number. Mark its expanded child rows so
+    // the results-state effect never recursively expands those same parts.
+    if (result?._seriesExpanded) {
+      expanded.push(result);
+      continue;
+    }
+
+    const matchedDesignation =
+      result?.standard?.display_stdNo || result?.standard?.standardno || "";
+    if (result?.matched && result?.standard &&
+        !/\bSER(?:IES)?\b/i.test(String(matchedDesignation))) {
+      // Child rows retain the original series request. Preserve them as-is;
+      // only the matched catalogue series root should trigger another lookup.
+      expanded.push({ ...result, _seriesExpanded: true });
+      continue;
+    }
+
+    const designation = getSeriesDesignation(result);
+
+    if (!designation) {
+      expanded.push(result);
+      continue;
+    }
+
+    const refreshed = await searchDocumentStandards([
+      {
+        sdo_name: result?.requested_sdo || "",
+        displaystdno: designation,
+      },
+    ]);
+    const refreshedMatches = refreshed.filter(
+      (item) => item?.matched && item?.standard
+    );
+    if (refreshedMatches.length) {
+      expanded.push(
+        ...refreshedMatches.map((item) => ({
+          ...item,
+          _seriesExpanded: true,
+          source_row_identity:
+            result?.source_row_identity || item?.source_row_identity,
+        }))
+      );
+    } else {
+      expanded.push({ ...result, _seriesExpanded: true });
+    }
+  }
+
+  return deduplicateResultRows(expanded);
+};
+
 function App() {
   // =========================================================
   // NORMAL SEARCH
@@ -39,6 +145,7 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [searchResults, setSearchResults] = useState([]);
+  const [searchRequestCount, setSearchRequestCount] = useState(0);
   const [previewPage, setPreviewPage] = useState(0);
   const [resultsPage, setResultsPage] = useState(0);
 
@@ -69,6 +176,9 @@ function App() {
 
   const [exportedDashboard, setExportedDashboard] =
     useState(null);
+
+  const [exportMode, setExportMode] =
+    useState("found-and-not-found");
 
   // all | found | not_found | sdo_missing | selected
   const [resultViewFilter, setResultViewFilter] =
@@ -157,6 +267,9 @@ function App() {
       </div>
     );
   };
+
+  const getResultKey = (result) =>
+    result?._resultKey ?? getStandardId(result);
 
   const getStandardId = (result) => {
     return (
@@ -254,6 +367,7 @@ function App() {
     setSelectedFile(null);
     setPreviewRows([]);
     setSearchResults([]);
+    setSearchRequestCount(0);
     setPreviewPage(0);
     setResultsPage(0);
     setSelectedResults([]);
@@ -293,7 +407,7 @@ function App() {
       const response =
         await searchStandards(query);
 
-      setSearchResult(response);
+      setSearchResult(Array.isArray(response) ? response : []);
     } catch (err) {
       console.error(err);
 
@@ -320,9 +434,12 @@ function App() {
       return;
     }
 
+    event.currentTarget.value = "";
+
     setSelectedFile(file);
     setPreviewRows([]);
     setSearchResults([]);
+    setSearchRequestCount(0);
     setPreviewPage(0);
     setResultsPage(0);
     setSelectedResults([]);
@@ -344,7 +461,7 @@ function App() {
     try {
       const response =
         await axios.post(
-          "http://127.0.0.1:8000/documents/extract",
+          `${API_BASE_URL}/documents/extract`,
           formData
         );
 
@@ -385,6 +502,7 @@ function App() {
         return;
       }
 
+      setSearchRequestCount(previewRows.length);
       setLoading(true);
       setError("");
       setSearchResults([]);
@@ -397,7 +515,7 @@ function App() {
       try {
         const response =
           await axios.post(
-            "http://127.0.0.1:8000/documents/search",
+            `${API_BASE_URL}/documents/search`,
             {
               filename:
                 selectedFile?.name ||
@@ -409,9 +527,20 @@ function App() {
         const results =
           response.data.results ||
           [];
+        setSearchRequestCount(
+          response.data.input_requests ?? previewRows.length
+        );
+
+        // A series result from the initial batch can remain as one catalog
+        // row. Resolve each series against the document-search endpoint
+        // before rendering so its available parts appear in this same list.
+        const displayResults = await expandSeriesResultsForExport(results);
 
         setSearchResults(
-          results
+          displayResults.map((result, index) => ({
+            ...result,
+            _resultKey: index,
+          }))
         );
 
         /*
@@ -428,7 +557,7 @@ function App() {
          * from verified results.
          */
         setExportedDashboard(
-          buildAnalysis(results)
+          buildAnalysis(displayResults)
         );
 
         window.scrollTo({
@@ -503,6 +632,17 @@ const buildAnalysis = (
    */
   const total =
     matchedResults.length;
+
+  const updatedEditionResults =
+    matchedResults.filter(
+      (result) => {
+        if (!result.status_detail) return false;
+        if (result.status === "EDITION MISMATCH") return true;
+        return String(result.status_detail).startsWith(
+          "Current available version:"
+        );
+      }
+    );
 
   /*
    * Pricing continues to use unique standards
@@ -833,6 +973,9 @@ const buildAnalysis = (
 
   return {
     total,
+    updatedEditionCount:
+      updatedEditionResults.length,
+    updatedEditionResults,
     totalPrice,
     groupingEnabled,
     groupCount:
@@ -846,6 +989,52 @@ const buildAnalysis = (
   };
 };
 
+  // Normalize any series row already held in the live results state as well
+  // as rows returned by a new search. This also repairs a displayed result
+  // set when the UI has retained an older, unexpanded response.
+  useEffect(() => {
+    if (!searchResults.length) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const normalizeSeriesRows = async () => {
+      try {
+        const expanded = await expandSeriesResultsForExport(searchResults);
+        const expandedSelections = await expandSeriesResultsForExport(selectedResults);
+        const changed =
+          expanded.length !== searchResults.length ||
+          expanded.some((result, index) => result !== searchResults[index]);
+        const selectionChanged =
+          expandedSelections.length !== selectedResults.length ||
+          expandedSelections.some(
+            (result, index) => result !== selectedResults[index]
+          );
+
+        if (!cancelled && selectionChanged) {
+          setSelectedResults(expandedSelections);
+        }
+
+        if (!cancelled && changed) {
+          const normalized = expanded.map((result, index) => ({
+            ...result,
+            _resultKey: index,
+          }));
+          setSearchResults(normalized);
+          setResultsPage(0);
+          setExportedDashboard(buildAnalysis(normalized));
+        }
+      } catch (normalizationError) {
+        console.error("Unable to expand series results:", normalizationError);
+      }
+    };
+
+    normalizeSeriesRows();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchResults, selectedResults]);
+
   // =========================================================
   // RESULT VIEW FILTER
   // =========================================================
@@ -855,10 +1044,12 @@ const buildAnalysis = (
       (result) => result.matched
     ).length;
 
-  const notFoundCount =
+  const notFoundResults =
     searchResults.filter(
       (result) =>
-        result.status === "NOT FOUND"
+        result.status === "NOT FOUND" ||
+        result.status === "SDO NOT FOUND" ||
+        !result.matched
     ).length;
 
   const sdoNotFoundCount =
@@ -868,7 +1059,7 @@ const buildAnalysis = (
     ).length;
 
   const selectedResultIdSet = new Set(
-    selectedResults.map(getStandardId)
+    selectedResults.map(getResultKey)
   );
 
   const filteredSearchResults =
@@ -879,21 +1070,21 @@ const buildAnalysis = (
       : resultViewFilter === "not_found"
         ? searchResults.filter(
             (result) =>
-              result.status === "NOT FOUND"
-          )
-        : resultViewFilter === "sdo_missing"
-          ? searchResults.filter(
-              (result) =>
-                result.status ===
-                "SDO NOT FOUND"
+              !result.matched
             )
-          : resultViewFilter === "selected"
-            ? searchResults.filter((result) =>
-                selectedResultIdSet.has(
-                  getStandardId(result)
-                )
+          : resultViewFilter === "sdo_missing"
+            ? searchResults.filter(
+                (result) =>
+                  result.status ===
+                  "SDO NOT FOUND"
               )
-            : searchResults;
+            : resultViewFilter === "selected"
+              ? searchResults.filter((result) =>
+                  selectedResultIdSet.has(
+                    getResultKey(result)
+                  )
+                )
+              : searchResults;
 
   const visibleSearchResults =
     filteredSearchResults.slice(
@@ -922,7 +1113,7 @@ const buildAnalysis = (
     );
 
   const selectedResultIds = new Set(
-    selectedResults.map(getStandardId)
+    selectedResults.map(getResultKey)
   );
 
   const allSelected =
@@ -930,7 +1121,7 @@ const buildAnalysis = (
       0 &&
     selectableResults.every((result) =>
       selectedResultIds.has(
-        getStandardId(result)
+        getResultKey(result)
       )
     );
 
@@ -944,25 +1135,18 @@ const buildAnalysis = (
       return;
     }
 
-    const id =
-      getStandardId(result);
+    const resultKey = getResultKey(result);
 
     setSelectedResults(
       (previous) => {
         const exists =
           previous.some(
-            (item) =>
-              getStandardId(
-                item
-              ) === id
+            (item) => getResultKey(item) === resultKey
           );
 
         if (exists) {
           return previous.filter(
-            (item) =>
-              getStandardId(
-                item
-              ) !== id
+            (item) => getResultKey(item) !== resultKey
           );
         }
 
@@ -977,15 +1161,12 @@ const buildAnalysis = (
   const handleSelectAll = () => {
     if (allSelected) {
       const visibleIds = new Set(
-        selectableResults.map(getStandardId)
+        selectableResults.map(getResultKey)
       );
 
       setSelectedResults((previous) =>
         previous.filter(
-          (item) =>
-            !visibleIds.has(
-              getStandardId(item)
-            )
+          (item) => !visibleIds.has(getResultKey(item))
         )
       );
       return;
@@ -994,13 +1175,13 @@ const buildAnalysis = (
     setSelectedResults((previous) => {
       const merged = [...previous];
       const existing = new Set(
-        previous.map(getStandardId)
+        previous.map(getResultKey)
       );
 
       selectableResults.forEach((result) => {
-        const id = getStandardId(result);
-        if (!existing.has(id)) {
-          existing.add(id);
+        const resultKey = getResultKey(result);
+        if (!existing.has(resultKey)) {
+          existing.add(resultKey);
           merged.push(result);
         }
       });
@@ -1015,9 +1196,7 @@ const buildAnalysis = (
 
   const handleExportSelected =
     async () => {
-      if (
-        !selectedResults.length
-      ) {
+      if (!searchResults.length) {
         return;
       }
 
@@ -1025,23 +1204,21 @@ const buildAnalysis = (
       setError("");
 
       try {
-        await exportSelectedStandards(
-          selectedResults
-        );
-
-        /*
-         * Dashboard now reflects exactly
-         * what was exported.
-         */
-        setExportedDashboard(
-          buildAnalysis(
-            selectedResults
-          )
-        );
-
-        setOpenGroupIndex(
-          null
-        );
+        if (exportMode === "latest-years") {
+          await exportLatestYearStandards(searchResults);
+        } else {
+          const refreshedResults =
+            await expandSeriesResultsForExport(searchResults);
+          const quotationResults = selectedResults.length
+            ? await expandSeriesResultsForExport(selectedResults)
+            : refreshedResults.filter((result) => result.matched);
+          await exportFoundAndNotFoundBundle(
+            quotationResults,
+            refreshedResults
+          );
+          setExportedDashboard(buildAnalysis(quotationResults));
+          setOpenGroupIndex(null);
+        }
       } catch (err) {
         console.error(err);
 
@@ -1451,51 +1628,54 @@ const buildAnalysis = (
               </div>
 
               {searchResult && (
-                <div className="quick-result">
-
-                  <div>
-                    <span>
-                      Requested
-                    </span>
-
-                    <strong>
-                      {displayValue(
-                        searchResult
-                          ?.requested_standard
-                      )}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>
-                      Result
-                    </span>
-
-                    <strong>
-                      {displayValue(
-                        searchResult
-                          ?.standard
-                          ?.display_stdNo ||
-                          searchResult
-                            ?.standard
-                            ?.standardno
-                      )}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>
-                      Status
-                    </span>
-
-                    <strong>
-                      {displayValue(
-                        searchResult
-                          ?.status
-                      )}
-                    </strong>
-                  </div>
-
+                <div className="quick-search-results">
+                  {searchResult.length ? (
+                    searchResult.map((result, index) => (
+                      <div
+                        className="quick-result"
+                        key={
+                          result?.standard?.id ||
+                          result?.standard?.Standard_id ||
+                          `${result?.requested_standard || "standard"}-${index}`
+                        }
+                      >
+                        <div>
+                          <span>Requested</span>
+                          <strong>
+                            {displayValue(result?.requested_standard)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Result</span>
+                          <strong>
+                            {displayValue(
+                              result?.standard?.display_stdNo ||
+                                result?.standard?.standardno ||
+                                result?.replacement_standard
+                            )}
+                          </strong>
+                        </div>
+                        <div>
+                          <span>Status</span>
+                          <strong>{displayValue(result?.status)}</strong>
+                        </div>
+                        {result?.standard?.title && (
+                          <p className="quick-result-title">
+                            {result.standard.title}
+                          </p>
+                        )}
+                        {result?.status_detail && (
+                          <p className="quick-result-detail">
+                            {result.status_detail}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="quick-result-empty">
+                      No matching standard was returned for this search.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1510,7 +1690,7 @@ const buildAnalysis = (
             <input
               id="document-upload"
               type="file"
-              accept=".xlsx,.xls,.csv,.pdf,.docx,.txt"
+              accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.txt"
               onChange={
                 handleFileChange
               }
@@ -1772,8 +1952,11 @@ const buildAnalysis = (
                     }
                   </strong>
                   <span>
-                    requested
+                    results
                   </span>
+                  <small>
+                    from {searchRequestCount} extracted requests
+                  </small>
                 </div>
 
               </div>
@@ -1826,7 +2009,7 @@ const buildAnalysis = (
                   </span>
 
                   <strong>
-                    {notFoundCount}
+                    {notFoundResults}
                   </strong>
                 </button>
 
@@ -1920,10 +2103,6 @@ const buildAnalysis = (
                       </th>
 
                       <th>
-                        Duplicate
-                      </th>
-
-                      <th>
                         Matched
                       </th>
 
@@ -1948,16 +2127,13 @@ const buildAnalysis = (
                       (result, pageIndex) => {
                         const index = resultsPageStart + pageIndex;
 
-                        const id =
-                          getStandardId(
-                            result
-                          );
-
-                        const checked = selectedResultIds.has(id);
+                        const checked = selectedResultIds.has(
+                          getResultKey(result)
+                        );
 
                         return (
                           <tr
-                            key={`${id}-${index}`}
+                            key={`result-${getResultKey(result)}`}
                             className={
                               checked
                                 ? "selected-row"
@@ -2000,12 +2176,6 @@ const buildAnalysis = (
                               )}
                             </td>
 
-                            <td>
-                              {result.is_duplicate
-                                ? `Duplicate of ${result.duplicate_of}`
-                                : EMPTY}
-                            </td>
-
                             <td className="matched-number">
                               {displayValue(
                                 result
@@ -2037,7 +2207,7 @@ const buildAnalysis = (
 
                               <span
                                 className={
-                                  result.matched
+                                  result.status === "AVAILABLE"
                                     ? "status-chip available"
                                     : "status-chip unavailable"
                                 }
@@ -2047,6 +2217,11 @@ const buildAnalysis = (
                                   result.status
                                 )}
                               </span>
+                              {result.status_detail && (
+                                  <div className="edition-update-note">
+                                    {result.status_detail}
+                                  </div>
+                                )}
 
                             </td>
 
@@ -2109,23 +2284,37 @@ const buildAnalysis = (
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  className="footer-export-button"
-                  onClick={
-                    handleExportSelected
-                  }
-                  disabled={
-                    selectedResults.length ===
-                      0 ||
-                    loading
-                  }
-                >
-                  Export Selection
-                  <span>
-                    ↓
-                  </span>
-                </button>
+                <div className="export-actions">
+                  <label className="export-output-control">
+                    <span>Export file</span>
+                    <select
+                      value={exportMode}
+                      onChange={(event) =>
+                        setExportMode(event.target.value)
+                      }
+                      disabled={loading}
+                    >
+                      <option value="found-and-not-found">
+                        Quotation + not found files
+                      </option>
+                      <option value="latest-years">
+                        Matching standards with current year
+                      </option>
+                    </select>
+                  </label>
+
+                  <button
+                    type="button"
+                    className="footer-export-button"
+                    onClick={handleExportSelected}
+                    disabled={searchResults.length === 0 || loading}
+                  >
+                    {exportMode === "latest-years"
+                      ? "Export Current Years"
+                      : "Export Found + Not Found"}
+                    <span>↓</span>
+                  </button>
+                </div>
 
               </div>
 
@@ -2225,6 +2414,14 @@ const buildAnalysis = (
                       individual buckets
                     </small>
 
+                  </div>
+
+                  <div className="metric-card updated-editions-metric">
+                    <span>Updated editions</span>
+                    <strong>
+                      {exportedDashboard?.updatedEditionCount || 0}
+                    </strong>
+                    <small>newer catalogue year supplied</small>
                   </div>
 
                 </div>

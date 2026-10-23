@@ -37,3 +37,4 @@ Thumbs.db
 
 # Temporary Excel / Office lock files
 ~$*
+.standards-tmp/
