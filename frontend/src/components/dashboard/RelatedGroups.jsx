@@ -1,8 +1,10 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
+  CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { GROUPING_THRESHOLD } from "../../constants.js";
 import { displayValue, getStandardId } from "../../utils/standards.js";
@@ -56,7 +58,7 @@ export default function RelatedGroups({
                 key={`${group.sdo}-${group.description}-${index}`}
                 open={open}
                 onOpenChange={(next) => onToggleGroup(next ? index : null)}
-                className="rounded-lg border p-3"
+                className="rounded-xl border border-border/70 bg-background/70 p-3 transition-colors data-[state=open]:border-primary/25"
               >
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-2">
@@ -67,18 +69,25 @@ export default function RelatedGroups({
                       {group.type}
                     </Badge>
                   </div>
-                  <div className="text-sm">{displayValue(group.description)}</div>
-                  <Button
-                    type="button"
-                    variant={open ? "secondary" : "outline"}
-                    size="sm"
-                    className="w-fit"
-                    onClick={() => onToggleGroup(open ? null : index)}
-                  >
-                    {open ? "−" : "+"} {group.count} standards · {open ? "Hide" : "View"}
-                  </Button>
+                  <div className="text-sm leading-5 text-foreground">{displayValue(group.description)}</div>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      type="button"
+                      variant={open ? "secondary" : "outline"}
+                      size="sm"
+                      className="h-9 w-fit rounded-lg"
+                      aria-label={`${open ? "Hide" : "Show"} ${group.count} standards for ${displayValue(group.sdo)}`}
+                      title={`${open ? "Hide" : "View"} related standards`}
+                    >
+                      {open ? <ChevronUp /> : <ChevronDown />}
+                      {group.count} standards · {open ? "Hide" : "View"}
+                    </Button>
+                  </CollapsibleTrigger>
                 </div>
-                <CollapsibleContent className="mt-3 border-t pt-3">
+                <CollapsibleContent
+                  id={`related-group-content-${index}`}
+                  className="mt-3 border-t pt-3"
+                >
                   <div className="mb-2 text-sm">
                     <strong>Included standards</strong>
                     <div className="text-xs text-muted-foreground">

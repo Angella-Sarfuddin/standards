@@ -1,51 +1,112 @@
-const DOTS = [
-  "bg-chart-1",
-  "bg-chart-2",
-  "bg-chart-3",
-  "bg-chart-4",
-  "bg-chart-5",
+const COLORS = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
 ];
+const RADIUS = 43;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+function getChartItems(breakdown) {
+  const sorted = [...breakdown]
+    .map((item) => ({ ...item, count: Number(item.count) || 0 }))
+    .filter((item) => item.count > 0)
+    .sort((left, right) => right.count - left.count);
+
+  if (sorted.length <= 5) return sorted;
+
+  const topItems = sorted.slice(0, 4);
+  const otherCount = sorted.slice(4).reduce((sum, item) => sum + item.count, 0);
+  return [...topItems, { name: "Other", count: otherCount }];
+}
 
 export default function StandardsMix({ dashboard }) {
-  const total = dashboard?.total || 0;
-  const items = (dashboard?.sdoBreakdown || []).slice(0, 5);
+  const items = getChartItems(dashboard?.sdoBreakdown || []);
+  const total = Number(dashboard?.total) || 0;
+
+  if (!items.length || total === 0) {
+    return (
+      <div className="grid min-h-36 place-items-center rounded-xl border border-dashed border-border/70 px-4 text-center text-sm text-muted-foreground">
+        The chart will appear when standards are matched.
+      </div>
+    );
+  }
+
+  let offset = 0;
+  const segments = items.map((item, index) => {
+    const fraction = item.count / total;
+    const length = fraction * CIRCUMFERENCE;
+    const segment = {
+      ...item,
+      color: COLORS[index % COLORS.length],
+      percentage: Math.round(fraction * 100),
+      dashArray: `${Math.max(0, length - 2)} ${CIRCUMFERENCE - Math.max(0, length - 2)}`,
+      dashOffset: -offset,
+    };
+    offset += length;
+    return segment;
+  });
 
   return (
-    <div className="flex items-center gap-4">
-      <div
-        className="relative grid size-28 shrink-0 place-items-center rounded-full"
-        style={{
-          background:
-            "conic-gradient(#7257ff 0deg, #8e78ff 110deg, #4187f5 190deg, #21a66b 255deg, #e7952f 320deg, #7257ff 360deg)",
-        }}
-      >
-        <div className="absolute inset-3 rounded-full bg-card" />
-        <div className="relative z-10 flex flex-col items-center">
-          <strong className="text-xl tracking-tight">{total}</strong>
-          <span className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            standards
+    <div className="grid grid-cols-[minmax(112px,0.8fr)_minmax(0,1.2fr)] items-center gap-3 sm:gap-4">
+      <div className="relative mx-auto aspect-square w-full max-w-36">
+        <svg
+          viewBox="0 0 100 100"
+          className="size-full -rotate-90 overflow-visible"
+          role="img"
+          aria-label={`Standards mix for ${total} matched standards`}
+        >
+          <circle
+            cx="50"
+            cy="50"
+            r={RADIUS}
+            fill="none"
+            stroke="var(--muted)"
+            strokeWidth="12"
+          />
+          {segments.map((segment) => (
+            <circle
+              key={segment.name}
+              cx="50"
+              cy="50"
+              r={RADIUS}
+              fill="none"
+              stroke={segment.color}
+              strokeWidth="12"
+              strokeDasharray={segment.dashArray}
+              strokeDashoffset={segment.dashOffset}
+              className="chart-segment transition-all duration-500 motion-reduce:transition-none"
+            />
+          ))}
+        </svg>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <strong className="text-2xl font-semibold tabular-nums tracking-tight text-foreground">
+            {total}
+          </strong>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            matched
           </span>
         </div>
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        {items.map((item, index) => {
-          const percentage = Math.round((item.count / (total || 1)) * 100);
 
-          return (
-            <div
-              key={item.name}
-              className="grid grid-cols-[8px_1fr_auto] items-center gap-2 text-xs"
-            >
-              <span className={`size-2 rounded-full ${DOTS[index] || DOTS[0]}`} />
-              <span className="truncate">{item.name}</span>
-              <strong>{percentage}%</strong>
-            </div>
-          );
-        })}
-        {!items.length && (
-          <p className="text-sm text-muted-foreground">No matched standards yet.</p>
-        )}
-      </div>
+      <ul className="flex min-w-0 flex-col gap-3" aria-label="Standards by organization">
+        {segments.map((segment) => (
+          <li key={segment.name} className="flex min-w-0 items-center gap-2">
+            <span
+              className="size-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: segment.color }}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground" title={segment.name}>
+              {segment.name}
+            </span>
+            <span className="shrink-0 text-right text-xs font-semibold tabular-nums text-foreground">
+              {segment.percentage}%
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

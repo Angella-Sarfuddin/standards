@@ -15,21 +15,23 @@ export default function Landing({
   previewPage,
   onPreviewPageChange,
   onVerify,
-  loading,
+  isQuickSearching,
+  isExtracting,
+  isSearchingDocuments,
 }) {
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10">
-      <section className="grid items-start gap-8 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="flex flex-col gap-4 pt-2">
-          <div className="text-xs font-medium tracking-[0.18em] text-primary">
+    <main className="mx-auto flex w-full max-w-[1440px] min-w-0 flex-col gap-7 px-4 py-7 sm:gap-8 sm:px-6 sm:py-10 lg:px-8">
+      <section className="grid min-w-0 items-center gap-6 lg:grid-cols-[minmax(0,1.08fr)_minmax(380px,0.92fr)] lg:gap-10 xl:gap-14">
+        <div className="flex min-w-0 flex-col gap-4 py-2 sm:gap-5">
+          <div className="text-xs font-semibold tracking-[0.16em] text-primary">
             STANDARDS SEARCH PLATFORM
           </div>
-          <h1 className="text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
+          <h1 className="max-w-3xl text-[clamp(2.15rem,4.4vw,3.75rem)] leading-[1.04] font-semibold tracking-[-0.045em] text-balance">
             Find the standards
-            <br />
+            <br className="hidden sm:block" />{" "}
             your customer needs.
           </h1>
-          <p className="max-w-md text-muted-foreground">
+          <p className="max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
             Upload a customer list, verify every standard, then move directly
             into the quotation workspace.
           </p>
@@ -39,11 +41,16 @@ export default function Landing({
           onSearchQueryChange={onSearchQueryChange}
           onSearch={onSearch}
           searchResult={searchResult}
-          loading={loading}
+          isQuickSearching={isQuickSearching}
         />
       </section>
 
-      <UploadZone selectedFile={selectedFile} onFileChange={onFileChange} />
+      <UploadZone
+        selectedFile={selectedFile}
+        onFileChange={onFileChange}
+        isExtracting={isExtracting}
+        disabled={isExtracting || isSearchingDocuments}
+      />
 
       <PreviewTable
         previewRows={previewRows}
@@ -52,7 +59,7 @@ export default function Landing({
         previewPage={previewPage}
         onPreviewPageChange={onPreviewPageChange}
         onVerify={onVerify}
-        loading={loading}
+        isSearchingDocuments={isSearchingDocuments}
       />
     </main>
   );

@@ -51,6 +51,21 @@
   --radius: 18px;
 }
 
+html.dark {
+  color-scheme: dark;
+  --ink: #f2f3f8;
+  --muted: #a5a7b7;
+  --soft: #85889a;
+  --purple-soft: #30294d;
+  --green-soft: #17382d;
+  --orange-soft: #40321d;
+  --red-soft: #45272b;
+  --blue-soft: #1c304a;
+  --border: #343744;
+  --surface: #191c25;
+  --surface-soft: #20232e;
+}
+
 /* =========================================================
    RESET
    ========================================================= */

@@ -8,6 +8,72 @@ from app.utils.standard_identity import (
     standard_number_year,
 )
 
+_AMENDMENT_DESIGNATION = re.compile(
+    r"(?i)(?:\+|/|\s)\s*"
+    r"(?:AMD\.?|AMEND(?:MENT)?\.?|AMENDMENT)\s*[-.:#]?\s*\d+"
+)
+
+
+def _preferred_price_format(entries, sdo_name):
+    formats = {int(entry[0] or 0) for entry in entries}
+    name = str(sdo_name or "").strip().upper()
+    if name in {"IEEE", "NEMA"} and 1 in formats:
+        return 1
+    return max(formats) if formats else None
+
+
+def _exact_listed_price(entries, sdo_name):
+    """The one price enrichment would keep for this master row."""
+    nonzero = [entry for entry in entries if entry[2] != 0]
+    if nonzero:
+        best_format = _preferred_price_format(nonzero, sdo_name)
+        values = {
+            entry[2]
+            for entry in nonzero
+            if int(entry[0] or 0) == best_format
+        }
+        if len(values) == 1:
+            return next(iter(values))
+        return None
+    if entries:
+        return entries[0][2]
+    return None
+
+
+def _master_ids_with_usable_price(masters, prices, sdo_title_map):
+    """Masters whose own catalogue price can be used without an alias."""
+    entries_by_master = {}
+    for price in prices:
+        if getattr(price, "non_member_price_rate", None) is None:
+            continue
+        entries_by_master.setdefault(price.std_id, []).append(
+            (price.formate_id, price.id, float(price.non_member_price_rate))
+        )
+    usable = set()
+    for master in masters:
+        sdo_name = str(sdo_title_map.get(master.sdo_id) or "").strip().upper()
+        exact_price = _exact_listed_price(
+            entries_by_master.get(master.id, []),
+            sdo_name,
+        )
+        designation = " ".join(
+            value
+            for value in (
+                str(getattr(master, "display_stdNo", "") or "").strip(),
+                str(getattr(master, "standardno", "") or "").strip(),
+            )
+            if value
+        )
+        if exact_price not in (None, 0):
+            usable.add(master.id)
+        elif (
+            sdo_name != "BIS"
+            and exact_price == 0
+            and not _AMENDMENT_DESIGNATION.search(designation)
+        ):
+            usable.add(master.id)
+    return usable
+
 
 def build_enrichment_map(
     standards,
@@ -32,11 +98,27 @@ def build_enrichment_map(
         if standard.sdo_id
     }
 
-    currency_map = (
-        enrichment_repository
-        .get_currency_info_for_sdos(sdo_ids)
+    sdo_metadata_lookup = getattr(
+        enrichment_repository,
+        "get_sdo_metadata_for_sdos",
+        None,
     )
-    sdo_title_map = enrichment_repository.get_sdo_titles(sdo_ids)
+
+    def load_sdo_metadata(requested_sdo_ids):
+        if callable(sdo_metadata_lookup):
+            metadata = sdo_metadata_lookup(requested_sdo_ids) or {}
+            return (
+                metadata.get("currencies", {}),
+                metadata.get("titles", {}),
+            )
+        return (
+            enrichment_repository.get_currency_info_for_sdos(
+                requested_sdo_ids
+            ),
+            enrichment_repository.get_sdo_titles(requested_sdo_ids),
+        )
+
+    currency_map, sdo_title_map = load_sdo_metadata(sdo_ids)
 
     masters = (
         enrichment_repository
@@ -53,20 +135,23 @@ def build_enrichment_map(
         master.id: master
         for master in masters
     }
-    edition_alias_lookup = getattr(
-        enrichment_repository,
-        "get_edition_price_aliases",
-        None,
-    )
-    edition_price_aliases = (
-        edition_alias_lookup(master_ids=[master.id for master in masters])
-        if callable(edition_alias_lookup)
+    masters_by_sdo_title = {}
+    for master in masters:
+        sdo_title = str(
+            sdo_title_map.get(master.sdo_id) or ""
+        ).strip().upper()
+        masters_by_sdo_title.setdefault(sdo_title, []).append(master)
+
+    bis_master_ids = [
+        master.id
+        for master in masters_by_sdo_title.get("BIS", [])
+    ]
+    bis_aliases = (
+        enrichment_repository.get_bis_master_aliases(
+            master_ids=bis_master_ids
+        )
+        if bis_master_ids
         else []
-    )
-    for alias in edition_price_aliases:
-        masters_by_id.setdefault(alias.id, alias)
-    bis_aliases = enrichment_repository.get_bis_master_aliases(
-        master_ids=[master.id for master in masters]
     )
     for alias in bis_aliases:
         masters_by_id.setdefault(alias.id, alias)
@@ -76,8 +161,14 @@ def build_enrichment_map(
         None,
     )
     api_price_aliases = (
-        api_alias_lookup(master_ids=[master.id for master in masters])
+        api_alias_lookup(
+            master_ids=[
+                master.id
+                for master in masters_by_sdo_title.get("API", [])
+            ]
+        )
         if callable(api_alias_lookup)
+        and masters_by_sdo_title.get("API")
         else []
     )
     for alias in api_price_aliases:
@@ -89,9 +180,10 @@ def build_enrichment_map(
     )
     international_price_aliases = (
         international_alias_lookup(
-            master_ids=[master.id for master in masters]
+            master_ids=bis_master_ids
         )
         if callable(international_alias_lookup)
+        and bis_master_ids
         else []
     )
     for alias in international_price_aliases:
@@ -102,12 +194,75 @@ def build_enrichment_map(
         for master in masters_by_id.values()
         if master.sdo_id
     }
-    currency_map.update(
-        enrichment_repository.get_currency_info_for_sdos(alias_sdo_ids)
+    missing_alias_sdo_ids = alias_sdo_ids - sdo_ids
+    if missing_alias_sdo_ids:
+        alias_currency_map, alias_sdo_title_map = load_sdo_metadata(
+            missing_alias_sdo_ids
+        )
+        sdo_title_map.update(alias_sdo_title_map)
+        currency_map.update(
+            alias_currency_map
+        )
+
+    master_ids = [
+        master.id
+        for master in masters
+    ]
+
+    direct_prices = (
+        enrichment_repository
+        .get_prices_for_standards(master_ids)
+        if master_ids
+        else []
     )
-    sdo_title_map.update(
-        enrichment_repository.get_sdo_titles(alias_sdo_ids)
+    priced_master_ids = _master_ids_with_usable_price(
+        masters,
+        direct_prices,
+        sdo_title_map,
     )
+    edition_alias_lookup = getattr(
+        enrichment_repository,
+        "get_edition_price_aliases",
+        None,
+    )
+    unpriced_master_ids = [
+        master_id
+        for master_id in master_ids
+        if master_id not in priced_master_ids
+    ]
+    edition_price_aliases = (
+        edition_alias_lookup(master_ids=unpriced_master_ids)
+        if callable(edition_alias_lookup) and unpriced_master_ids
+        else []
+    )
+    for alias in edition_price_aliases:
+        masters_by_id.setdefault(alias.id, alias)
+    alias_prices = (
+        enrichment_repository.get_prices_for_standards(
+            [alias.id for alias in edition_price_aliases],
+        )
+        if edition_price_aliases
+        else []
+    )
+    other_alias_ids = [
+        alias.id
+        for alias in (
+            *bis_aliases,
+            *api_price_aliases,
+            *international_price_aliases,
+        )
+        if alias.id not in priced_master_ids
+    ]
+    other_alias_prices = (
+        enrichment_repository.get_prices_for_standards(other_alias_ids)
+        if other_alias_ids
+        else []
+    )
+    prices = [
+        *direct_prices,
+        *alias_prices,
+        *other_alias_prices,
+    ]
 
     def price_identity(master):
         sdo_name = str(
@@ -139,30 +294,9 @@ def build_enrichment_map(
             [],
         ).append(master)
 
-    master_ids = [
-        master.id
-        for master in masters
-    ]
-
     # --------------------------------------------------------
     # Prices
     # --------------------------------------------------------
-
-    prices = (
-        enrichment_repository
-        .get_prices_for_standards(
-            master_ids,
-            additional_master_ids=[
-                alias.id
-                for alias in (
-                    *edition_price_aliases,
-                    *bis_aliases,
-                    *api_price_aliases,
-                    *international_price_aliases,
-                )
-            ],
-        )
-    )
 
     prices_by_master = {}
     for price in prices:
@@ -536,9 +670,13 @@ def build_enrichment_map(
         "get_bsi_modules_for_standards",
         None,
     )
+    bsi_master_ids = [
+        master.id
+        for master in masters_by_sdo_title.get("BSI", [])
+    ]
     bsi_modules_by_standard = (
-        bsi_module_lookup(master_ids)
-        if callable(bsi_module_lookup)
+        bsi_module_lookup(bsi_master_ids)
+        if callable(bsi_module_lookup) and bsi_master_ids
         else {}
     )
     for master_id, modules in bsi_modules_by_standard.items():

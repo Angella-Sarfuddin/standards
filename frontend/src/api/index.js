@@ -16,21 +16,27 @@ export const searchStandards = async (standard) => {
     : [];
 };
 
-export const searchDocumentStandards = async (rows) => {
-  const response = await API.post("/documents/search", { rows });
-  return response.data?.results || [];
+const postDocumentSearch = async (rows, filename) => {
+  const payload = { rows };
+  if (filename !== undefined) {
+    payload.filename = filename;
+  }
+  const response = await API.post("/documents/search", payload);
+  return response.data;
 };
 
-export const uploadExcel = async (file) => {
+export const searchDocumentStandards = async (rows) => {
+  const data = await postDocumentSearch(rows);
+  return data?.results || [];
+};
+
+export const searchDocumentRequest = async (rows, filename) =>
+  postDocumentSearch(rows, filename);
+
+export const extractDocument = async (file) => {
   const formData = new FormData();
-
   formData.append("file", file);
-
-  const response = await API.post(
-    "/excel/upload",
-    formData
-  );
-
+  const response = await API.post("/documents/extract", formData);
   return response.data;
 };
 export const exportSelectedStandards = async (results) => {

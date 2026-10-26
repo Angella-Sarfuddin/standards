@@ -1,9 +1,9 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.services.document_search_service import DocumentSearchService
 from app.services.document_search.selection_context import use_candidate_status_map
-from app.services.bis_status_service import BISStatusService
 from app.services.document_service import DocumentService
 from app.services.extractors.excel_extractor import ExcelExtractor
 from app.utils.standard_expression_parser import StandardExpressionParser
@@ -316,6 +316,8 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertEqual([candidate.id for candidate in selected], [2])
 
     def test_api_yearless_edition_placeholder_cannot_override_historical_editions(self):
+        # Protect current API placeholder handling pending confirmation of
+        # the publisher-specific zero-year contract.
         row = {
             "sdo_name": "API",
             "search_sdo_name": "API",
@@ -460,27 +462,14 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
-    def test_withdrawn_bis_2099_includes_verified_superseding_standard(self):
-        standard = SimpleNamespace(
-            standardno="BIS 2099",
-            display_stdNo="BIS 2099 : 1986",
-            standardyear=1986,
-        )
-        self.assertEqual(
-            DocumentSearchService._bis_replacement_standard(
-                "BIS",
-                standard,
-                "WITHDRAWN",
-            ),
-            "IS/IEC 60137 : 2017",
-        )
-        self.assertIsNone(
-            DocumentSearchService._bis_replacement_standard(
-                "IEC",
-                standard,
-                "WITHDRAWN",
-            )
-        )
+    def test_bis_2099_designation_parses_as_edition_identity(self):
+        # Preserve the real designation as syntax input only. This test does
+        # not assert an unverified replacement or supersession relationship.
+        identity = parse_identity("BIS", "BIS 2099 : 1986")
+
+        self.assertEqual(identity["sdo_name"], "BIS")
+        self.assertEqual(identity["core_number"], "2099")
+        self.assertEqual(identity["year"], 1986)
 
     def test_active_master_status_remains_available(self):
         self.assertEqual(
@@ -605,6 +594,29 @@ class StandardIdentityTests(unittest.TestCase):
             ),
         )
 
+    def test_candidate_sdo_names_dispatches_tema_class_helper(self):
+        calls = []
+
+        def is_tema(row):
+            calls.append(row)
+            return True
+
+        with patch.object(
+            DocumentSearchService,
+            "_is_tema_edition_request",
+            staticmethod(is_tema),
+        ):
+            names = DocumentSearchService._candidate_sdo_names(
+                "",
+                "Custom publication",
+            )
+
+        self.assertEqual(
+            calls,
+            [{"sdo_name": "", "displaystdno": "Custom publication"}],
+        )
+        self.assertIn("TEMA", names)
+
     def test_series_suffix_is_a_family_marker(self):
         identity = parse_identity("IEC", "IEC 60332:2026 SERIES/EN-FR")
         self.assertEqual(identity["year"], 2026)
@@ -674,6 +686,26 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertIsNone(short_containment)
         self.assertTrue(any(p.startswith("API") for p in short_bound))
         self.assertIn("API 12", short_bound)
+
+    def test_indexable_identity_patterns_keep_a_left_prefix(self):
+        from app.utils.standard_identity import (
+            identity_fulltext_terms,
+            identity_indexable_like_patterns,
+            like_pattern_is_prefix_indexable,
+        )
+
+        patterns = identity_indexable_like_patterns("ISO", "9001")
+        self.assertIn("ISO 9001%", patterns)
+        self.assertIn("ISO9001%", patterns)
+        self.assertTrue(
+            all(like_pattern_is_prefix_indexable(pattern) for pattern in patterns)
+        )
+        self.assertFalse(any(pattern.startswith("%") for pattern in patterns))
+        self.assertEqual(
+            identity_fulltext_terms("A29A29M"),
+            ["A29A29M", "A29"],
+        )
+        self.assertEqual(identity_fulltext_terms("9001"), ["9001"])
 
     def test_skip_master_identity_keeps_display_lookups_only(self):
         service = DocumentSearchService.__new__(DocumentSearchService)
@@ -1842,7 +1874,7 @@ class StandardIdentityTests(unittest.TestCase):
 
         service = DocumentSearchService.__new__(DocumentSearchService)
         service.repository = FakeRepository()
-        service.resolve_sdo_ids = lambda _names: {"BIS": 1}
+        service.resolve_sdo_ids = lambda _names, fallback_names=None: {"BIS": 1}
         service.enrichment_repository = SimpleNamespace(
             get_standard_status_map=lambda _status_ids: {
                 11: {"name": "ACTIVE", "cart_show": 1, "std_show": 1},
@@ -1866,19 +1898,12 @@ class StandardIdentityTests(unittest.TestCase):
             },
         }
 
-        from unittest.mock import patch
-
-        with patch.object(
-            BISStatusService,
-            "verify_rows",
-            return_value={},
-        ):
-            results = service.search(
-                [
-                    {"sdo_name": "BIS", "displaystdno": "IS 3347 01-Jan"},
-                    {"sdo_name": "BIS", "displaystdno": "IS 3347 02-Jan"},
-                ]
-            )
+        results = service.search(
+            [
+                {"sdo_name": "BIS", "displaystdno": "IS 3347 01-Jan"},
+                {"sdo_name": "BIS", "displaystdno": "IS 3347 02-Jan"},
+            ]
+        )
 
         self.assertEqual(len(results), 2)
         self.assertEqual(

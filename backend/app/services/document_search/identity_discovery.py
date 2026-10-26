@@ -1,12 +1,67 @@
 """Identity-hint candidate discovery for document searches."""
 
 from app.utils.standard_identity import (
+    canonicalize_search_request,
     identity_index_cores,
     identity_lookup_core_tokens,
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
 )
+from app.utils.standard_expression_parser import StandardExpressionParser
+
+
+def candidate_sdo_names(sdo_name, displaystdno, *, service_class):
+    """Return plausible SDO aliases for one request's identity fields."""
+    candidates = set()
+    raw_sdo = str(sdo_name or "").strip()
+    raw_display = str(displaystdno or "").strip()
+
+    if raw_sdo:
+        candidates.add(raw_sdo)
+
+    if service_class._is_tema_edition_request(
+        {"sdo_name": raw_sdo, "displaystdno": raw_display}
+    ):
+        candidates.add("TEMA")
+
+    lookup_sdo, _lookup_standard, id_name = canonicalize_search_request(
+        raw_sdo,
+        raw_display,
+    )
+    for candidate in (lookup_sdo, id_name):
+        if candidate and str(candidate).strip():
+            candidates.add(str(candidate).strip())
+
+    inferred_sdo, _ = StandardExpressionParser.infer_sdo_and_body(
+        raw_display
+    )
+    if inferred_sdo and str(inferred_sdo).strip():
+        candidates.add(str(inferred_sdo).strip())
+        inferred_lookup_sdo, _inferred_standard, inferred_id_name = (
+            canonicalize_search_request(
+                inferred_sdo,
+                raw_display,
+            )
+        )
+        candidates.update(
+            candidate
+            for candidate in (
+                inferred_lookup_sdo,
+                inferred_id_name,
+            )
+            if candidate and str(candidate).strip()
+        )
+
+    return list(
+        {
+            candidate.upper()
+            for candidate in candidates
+            if candidate
+            and str(candidate).strip()
+            and StandardExpressionParser.is_plausible_sdo(candidate)
+        }
+    )
 
 
 def discover_identity_candidates(identity_lookup_rows, repository):

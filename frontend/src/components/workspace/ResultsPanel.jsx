@@ -17,7 +17,6 @@ export default function ResultsPanel({
   filteredCount,
   visibleResults,
   resultsPage,
-  resultsPageStart,
   onResultsPageChange,
   resultViewFilter,
   matchedCount,
@@ -34,19 +33,19 @@ export default function ResultsPanel({
   exportMode,
   onExportModeChange,
   onExport,
-  loading,
+  isExporting,
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card p-4">
+    <section className="flex min-w-0 flex-col gap-4 rounded-2xl border border-border/70 bg-card p-4 shadow-sm sm:p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-xs tracking-[0.16em] text-muted-foreground">
+          <div className="text-[11px] font-semibold tracking-[0.14em] text-primary">
             DATABASE VERIFICATION
           </div>
-          <h2 className="text-xl font-semibold">Search Results</h2>
+          <h2 className="mt-1 text-xl font-semibold tracking-tight sm:text-2xl">Search Results</h2>
         </div>
-        <div className="text-right">
-          <div className="text-2xl font-semibold">{searchResults.length}</div>
+        <div className="shrink-0 text-right">
+          <div className="text-2xl font-semibold tabular-nums tracking-tight">{searchResults.length}</div>
           <div className="text-xs text-muted-foreground">results</div>
           <div className="text-xs text-muted-foreground">
             from {searchRequestCount} extracted requests
@@ -63,16 +62,28 @@ export default function ResultsPanel({
         onToggleFilter={onToggleFilter}
       />
 
-      <ResultsTable
-        visibleResults={visibleResults}
-        resultsPageStart={resultsPageStart}
-        selectedResultIds={selectedResultIds}
-        allSelected={allSelected}
-        selectableCount={selectableCount}
-        onSelectResult={onSelectResult}
-        onSelectAll={onSelectAll}
-        onManualSearch={onManualSearch}
-      />
+      <p className="-mt-2 text-xs text-muted-foreground">
+        Select all applies to selectable rows on this page.
+      </p>
+
+      {filteredCount === 0 ? (
+        <div
+          className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground"
+          role="status"
+        >
+          No rows in this view.
+        </div>
+      ) : (
+        <ResultsTable
+          visibleResults={visibleResults}
+          selectedResultIds={selectedResultIds}
+          allSelected={allSelected}
+          selectableCount={selectableCount}
+          onSelectResult={onSelectResult}
+          onSelectAll={onSelectAll}
+          onManualSearch={onManualSearch}
+        />
+      )}
 
       <Pagination
         page={resultsPage}
@@ -80,19 +91,19 @@ export default function ResultsPanel({
         onPageChange={onResultsPageChange}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+      <div className="flex flex-col items-stretch justify-between gap-3 border-t border-border/70 pt-4 sm:flex-row sm:items-center">
         <div className="text-sm">
-          <span className="mr-2 inline-block size-2 rounded-full bg-primary" />
+          <span className="mr-2 inline-block size-2 rounded-full bg-primary align-middle" />
           <strong>{selectedCount}</strong>
           <span className="ml-2 text-muted-foreground">selected for quotation</span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           <Select
             value={exportMode}
             onValueChange={onExportModeChange}
-            disabled={loading}
+            disabled={isExporting}
           >
-            <SelectTrigger className="w-72">
+            <SelectTrigger className="h-10 w-full rounded-xl bg-background sm:w-72">
               <SelectValue placeholder="Export file" />
             </SelectTrigger>
             <SelectContent>
@@ -107,13 +118,14 @@ export default function ResultsPanel({
           <Button
             type="button"
             variant="outline"
+            className="h-10 w-full rounded-xl sm:w-auto"
             onClick={onExport}
-            disabled={searchResults.length === 0 || loading}
+            disabled={selectedCount === 0 || isExporting}
           >
             <Download />
-            {exportMode === "latest-years"
-              ? "Export Current Years"
-              : "Export Found + Not Found"}
+            {isExporting
+              ? "Exporting..."
+              : `Export ${selectedCount} Selected`}
           </Button>
         </div>
       </div>

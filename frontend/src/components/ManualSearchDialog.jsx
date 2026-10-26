@@ -27,13 +27,13 @@ export default function ManualSearchDialog({
         }
       }}
     >
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="rounded-2xl border-border/80 p-5 shadow-xl sm:max-w-md sm:p-6">
         <DialogHeader>
-          <div className="text-xs tracking-[0.16em] text-muted-foreground">
+          <div className="text-[11px] font-semibold tracking-[0.14em] text-primary">
             MANUAL SEARCH
           </div>
-          <DialogTitle>Find this standard</DialogTitle>
-          <DialogDescription>
+          <DialogTitle className="text-xl tracking-tight">Find this standard</DialogTitle>
+          <DialogDescription className="leading-6">
             The automatic lookup did not resolve this row. Search manually.
           </DialogDescription>
         </DialogHeader>
@@ -42,6 +42,7 @@ export default function ManualSearchDialog({
             SEARCH
           </span>
           <Input
+            className="h-11 rounded-xl bg-background px-3"
             value={value}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={(event) => {
@@ -54,12 +55,13 @@ export default function ManualSearchDialog({
           />
         </div>
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" className="h-10 rounded-xl" onClick={onCancel}>
             Cancel
           </Button>
           <Button
             type="button"
             onClick={onSubmit}
+            className="h-10 rounded-xl"
             disabled={loading || !value.trim()}
           >
             {loading ? "Searching..." : "Search Database"}

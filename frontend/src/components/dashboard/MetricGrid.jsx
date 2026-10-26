@@ -26,18 +26,18 @@ const METRICS = [
 
 export default function MetricGrid({ dashboard }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
+    <div className="grid grid-cols-2 gap-2.5">
       {METRICS.map((metric) => (
         <Card
           key={metric.key}
-          className={metric.featured ? "border-primary/30 bg-primary/5" : ""}
+          className={`min-w-0 border border-border/70 shadow-none ring-0 ${metric.featured ? "bg-primary/[0.045]" : "bg-background/70"}`}
         >
-          <CardContent className="flex flex-col gap-1 p-3">
-            <span className="text-xs text-muted-foreground">{metric.label}</span>
-            <strong className="text-2xl font-semibold tracking-tight">
+          <CardContent className="flex min-h-[104px] flex-col items-start gap-1.5 p-3.5 sm:p-4">
+            <span className="text-xs font-medium leading-4 text-muted-foreground">{metric.label}</span>
+            <strong className="text-2xl font-semibold tabular-nums tracking-tight sm:text-[1.75rem]">
               {dashboard?.[metric.key] || 0}
             </strong>
-            <small className="text-xs text-muted-foreground">{metric.hint}</small>
+            <small className="text-[11px] leading-4 text-muted-foreground">{metric.hint}</small>
           </CardContent>
         </Card>
       ))}

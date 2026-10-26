@@ -118,11 +118,13 @@ export const deduplicateResultRows = (results) => {
 };
 
 export const expandSeriesResultsForExport = async (results) => {
-  const expanded = [];
+  const sourceResults = results || [];
+  const expandedByIndex = Array(sourceResults.length);
+  const pendingSeries = [];
 
-  for (const result of results || []) {
+  for (const [index, result] of sourceResults.entries()) {
     if (result?._seriesExpanded) {
-      expanded.push(result);
+      expandedByIndex[index] = [result];
       continue;
     }
 
@@ -133,39 +135,72 @@ export const expandSeriesResultsForExport = async (results) => {
       result?.standard &&
       !/\bSER(?:IES)?\b/i.test(String(matchedDesignation))
     ) {
-      expanded.push({ ...result, _seriesExpanded: true });
+      expandedByIndex[index] = [{ ...result, _seriesExpanded: true }];
       continue;
     }
 
     const designation = getSeriesDesignation(result);
 
     if (!designation) {
-      expanded.push(result);
+      expandedByIndex[index] = [result];
       continue;
     }
 
-    const refreshed = await searchDocumentStandards([
-      {
+    pendingSeries.push({
+      index,
+      result,
+      designation,
+      sourceRow: pendingSeries.length + 1,
+    });
+  }
+
+  if (pendingSeries.length) {
+    const sourceFile = "__series_expansion_batch__";
+    const refreshed = await searchDocumentStandards(
+      pendingSeries.map(({ result, designation, sourceRow }) => ({
         sdo_name: result?.requested_sdo || "",
         displaystdno: designation,
-      },
-    ]);
-    const refreshedMatches = refreshed.filter(
-      (item) => item?.matched && item?.standard
+        source_file: sourceFile,
+        source_row: sourceRow,
+      }))
     );
-    if (refreshedMatches.length) {
-      expanded.push(
-        ...refreshedMatches.map((item) => ({
-          ...item,
-          _seriesExpanded: true,
-          source_row_identity:
-            result?.source_row_identity || item?.source_row_identity,
-        }))
+    const refreshedBySourceRow = new Map();
+    for (const item of refreshed) {
+      const sourceIdentity = item?.source_row_identity;
+      if (
+        !Array.isArray(sourceIdentity) ||
+        sourceIdentity[0] !== sourceFile
+      ) {
+        continue;
+      }
+      const sourceRow = Number(sourceIdentity[1]);
+      if (!Number.isInteger(sourceRow)) continue;
+      const group = refreshedBySourceRow.get(sourceRow) || [];
+      group.push(item);
+      refreshedBySourceRow.set(sourceRow, group);
+    }
+
+    for (const { index, result, sourceRow } of pendingSeries) {
+      const refreshedMatches = (refreshedBySourceRow.get(sourceRow) || []).filter(
+        (item) => item?.matched && item?.standard
       );
-    } else {
-      expanded.push({ ...result, _seriesExpanded: true });
+      if (refreshedMatches.length) {
+        expandedByIndex[index] = refreshedMatches.map((item) => {
+          const expandedItem = { ...item };
+          delete expandedItem.source_row_identity;
+          return {
+            ...expandedItem,
+            _seriesExpanded: true,
+            ...(result?.source_row_identity
+              ? { source_row_identity: result.source_row_identity }
+              : {}),
+          };
+        });
+      } else {
+        expandedByIndex[index] = [{ ...result, _seriesExpanded: true }];
+      }
     }
   }
 
-  return deduplicateResultRows(expanded);
+  return deduplicateResultRows(expandedByIndex.flat());
 };

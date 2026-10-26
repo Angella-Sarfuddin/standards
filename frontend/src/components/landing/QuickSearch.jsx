@@ -1,4 +1,4 @@
-import { ArrowRight, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,18 +14,19 @@ export default function QuickSearch({
   onSearchQueryChange,
   onSearch,
   searchResult,
-  loading,
+  isQuickSearching,
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-xs tracking-[0.16em] text-muted-foreground">
+    <Card className="border border-border/70 bg-card shadow-sm ring-0">
+      <CardHeader className="px-5 pt-5 sm:px-6 sm:pt-6">
+        <CardTitle className="text-xs font-semibold tracking-[0.14em] text-muted-foreground">
           QUICK SEARCH
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="flex gap-2">
+      <CardContent className="flex flex-col gap-4 px-5 pb-5 sm:px-6 sm:pb-6">
+        <div className="flex min-w-0 gap-2">
           <Input
+            className="h-11 min-w-0 rounded-xl bg-background px-3 text-sm shadow-none"
             value={searchQuery}
             onChange={(event) => onSearchQueryChange(event.target.value)}
             onKeyDown={(event) => {
@@ -35,10 +36,14 @@ export default function QuickSearch({
             }}
             placeholder="e.g. ISO 530"
           />
-          <Button type="button" onClick={onSearch} disabled={loading}>
+          <Button
+            type="button"
+            onClick={onSearch}
+            className="h-11 rounded-xl px-4 shadow-sm"
+            disabled={isQuickSearching || !searchQuery.trim()}
+          >
             <Search />
-            {loading ? "Searching..." : "Search"}
-            <ArrowRight />
+            {isQuickSearching ? "Searching..." : "Search"}
           </Button>
         </div>
 

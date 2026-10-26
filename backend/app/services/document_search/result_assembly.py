@@ -14,6 +14,19 @@ from app.utils.standard_identity import (
 )
 
 
+def candidate_has_database_document(candidate, enrichment_map):
+    """Require an available database master with an active price row."""
+    standard_id = getattr(candidate, "Standard_id", None)
+    if hasattr(candidate, "DocumentAvailability"):
+        if getattr(candidate, "DocumentAvailability", None) != 1:
+            return False
+    enrichment = (enrichment_map or {}).get(standard_id) or {}
+    return (
+        enrichment.get("document_available") is True
+        and enrichment.get("has_database_price") is True
+    )
+
+
 def assemble_results(
     service,
     started,
@@ -583,9 +596,9 @@ def assemble_results(
                 templates.append(template)
                 results.append(template)
 
-                # If a request names a superseded year, report the
-                # current available edition as the match and retain the
-                # exact requested edition in the not-found results.
+                # If the request names a different year, retain the exact
+                # requested edition as not found. A year difference alone
+                # does not establish that the available edition supersedes it.
                 if (
                     is_match
                     and requested_year is not None
@@ -596,14 +609,44 @@ def assemble_results(
                     is_match
                     and requested_tema_is_historical
                 ):
+                    has_explicit_replacement = bool(
+                        hi_replacement is not None
+                        or (
+                            ieee_resolution is not None
+                            and ieee_resolution[1] is not None
+                        )
+                        or requested_tema_is_historical
+                    )
+                    ieee_relationship_type = (
+                        getattr(ieee_resolution[0], "relationship_type", None)
+                        if ieee_resolution is not None
+                        else None
+                    )
                     historical_template = {
                         "requested_sdo": row["sdo_name"],
                         "requested_standard": row["result_displaystdno"],
                         "matched": False,
                         "status": "NOT FOUND",
                         "status_detail": (
-                            f"Requested edition {requested_year} is superseded; "
-                            f"latest available edition is {actual_year}."
+                            (
+                                (
+                                    f"Requested edition {requested_year} was "
+                                    "incorporated into the current consolidated "
+                                    f"edition {actual_year}."
+                                    if ieee_relationship_type
+                                    == "INCORPORATED_INTO"
+                                    else (
+                                        f"Requested edition {requested_year} is "
+                                        "superseded; latest available edition is "
+                                        f"{actual_year}."
+                                    )
+                                )
+                                if has_explicit_replacement
+                                else (
+                                    f"Requested edition {requested_year} does not "
+                                    f"match the available edition {actual_year}."
+                                )
+                            )
                             if requested_year is not None
                             and int(requested_year) != int(actual_year)
                             and not requested_tema_is_historical
@@ -612,17 +655,27 @@ def assemble_results(
                                 f"latest available edition is {actual_year}."
                             )
                         ),
-                        "replacement_standard": str(
-                            data.get("display_stdNo")
-                            or standard.display_stdNo
-                            or standard.standardno
-                            or ""
+                        "replacement_standard": (
+                            str(
+                                data.get("display_stdNo")
+                                or standard.display_stdNo
+                                or standard.standardno
+                                or ""
+                            )
+                            if has_explicit_replacement
+                            else None
                         ),
-                        "superseded_by": str(
-                            data.get("display_stdNo")
-                            or standard.display_stdNo
-                            or standard.standardno
-                            or ""
+                        "superseded_by": (
+                            str(
+                                data.get("display_stdNo")
+                                or standard.display_stdNo
+                                or standard.standardno
+                                or ""
+                            )
+                            if has_explicit_replacement
+                            and ieee_relationship_type
+                            != "INCORPORATED_INTO"
+                            else None
                         ),
                         "standard": None,
                         "actions": {"manual_search": True},
@@ -656,12 +709,26 @@ def assemble_results(
             else None
         )
         if ieee_metadata:
-            not_found_detail = (
-                "IEEE SA lists this edition as superseded; current "
-                f"successor is {ieee_metadata.replacement_designation}, "
-                "but that successor is not present as an active record "
-                "in the local catalogue."
+            ieee_relationship_type = getattr(
+                ieee_metadata,
+                "relationship_type",
+                "SUPERSEDED_BY",
             )
+            if ieee_relationship_type == "INCORPORATED_INTO":
+                not_found_detail = (
+                    "IEEE SA lists this amendment edition as superseded and "
+                    "incorporated into the IEEE 802.1Q consolidated family; "
+                    f"the current consolidated edition is "
+                    f"{ieee_metadata.replacement_designation}, but that "
+                    "edition is not available in the local catalogue."
+                )
+            else:
+                not_found_detail = (
+                    "IEEE SA lists this edition as superseded; current "
+                    f"successor is {ieee_metadata.replacement_designation}, "
+                    "but that successor is not available in the local "
+                    "catalogue."
+                )
         elif unavailable_edition_status:
             not_found_detail = (
                 f"Requested edition is marked "
@@ -687,6 +754,12 @@ def assemble_results(
             "superseded_by": (
                 ieee_metadata.replacement_designation
                 if ieee_metadata
+                and getattr(
+                    ieee_metadata,
+                    "relationship_type",
+                    "SUPERSEDED_BY",
+                )
+                != "INCORPORATED_INTO"
                 else None
             ),
             "standard": None,

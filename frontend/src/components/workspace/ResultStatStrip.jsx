@@ -32,14 +32,14 @@ export default function ResultStatStrip({
             key={filter.id}
             type="button"
             variant={active ? "default" : "outline"}
-            className="h-auto w-full min-w-0 flex-col items-start gap-1 px-3 py-3 whitespace-normal"
+            className="h-auto w-full min-w-0 flex-col items-start gap-1 rounded-xl border-border/70 px-3.5 py-3.5 text-left whitespace-normal shadow-none"
             onClick={() => onToggleFilter(filter.id)}
             aria-pressed={active}
           >
             <span className={active ? "text-primary-foreground/80" : filter.tone}>
               {filter.label}
             </span>
-            <span className="text-lg font-semibold">{counts[filter.id]}</span>
+            <span className="text-xl font-semibold tabular-nums tracking-tight">{counts[filter.id]}</span>
           </Button>
         );
       })}

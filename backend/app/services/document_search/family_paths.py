@@ -2,7 +2,41 @@
 
 import re
 
-from app.utils.standard_identity import normalize_identity_core
+from app.utils.standard_identity import normalize_identity_core, parse_identity
+
+
+def _candidate_is_part_of_root(candidate, row):
+    requested = row["identity"]
+    if requested.get("qualifier") or requested.get("family_lookup"):
+        return False
+
+    candidate_identity = parse_identity(
+        row["sdo_name"],
+        candidate.display_stdNo or candidate.standardno or "",
+    )
+    requested_core = normalize_identity_core(
+        requested.get("core_number") or ""
+    )
+    candidate_core = normalize_identity_core(
+        candidate_identity.get("core_number") or ""
+    )
+    extension = candidate_core[len(requested_core):]
+    return bool(
+        requested_core
+        and candidate_core.startswith(requested_core)
+        and (
+            (
+                (candidate_identity.get("qualifier") or "").startswith(
+                    "PART:"
+                )
+                and candidate_core == requested_core
+            )
+            or re.fullmatch(r"PART\d+", extension)
+            and (candidate_identity.get("qualifier") or "").startswith(
+                "SECTION:"
+            )
+        )
+    )
 
 
 def _part_family_path(candidate_identity, requested_identity):

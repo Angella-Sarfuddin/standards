@@ -451,6 +451,52 @@ def identity_discovery_terms(
     return core, None, list(dict.fromkeys(bound))
 
 
+def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
+    """Prefix-anchored forms an index can seek for one compact core.
+
+    The trailing ``%`` still admits later editions (``ISO 9001:2015`` and
+    ``ISO 9001:2024``). A leading ``%`` is never used here. Adopted
+    spellings such as ``ISO/IEC 9001`` are found by the fulltext lookup,
+    not by expanding every publisher alias into this list.
+    """
+    compact = normalize_identity_core(core)
+    prefix = normalize_tokens(sdo_prefix)
+    if not compact or not prefix or len(compact) < _MIN_CONTAINMENT_CORE_LEN:
+        return []
+
+    patterns = [
+        f"{prefix} {compact}%",
+        f"{prefix}{compact}%",
+    ]
+    glued = normalize_identity_core(prefix)
+    compact_prefix = prefix.replace(" ", "")
+    if glued and glued not in {prefix, compact_prefix}:
+        patterns.append(f"{glued}{compact}%")
+    if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
+        patterns.append(f"{compact}%")
+    return [
+        pattern
+        for pattern in dict.fromkeys(patterns)
+        if like_pattern_is_prefix_indexable(pattern)
+    ]
+
+
+def identity_fulltext_terms(core: str) -> List[str]:
+    """Boolean-mode words that still contain this core.
+
+    ``A29/A29M`` is stored as the words ``A29`` and ``A29M``, so the leading
+    letter-number token is included beside the full compact core.
+    """
+    compact = normalize_identity_core(core)
+    if len(compact) < _MIN_CONTAINMENT_CORE_LEN:
+        return []
+    terms = [compact]
+    head = re.match(r"[A-Z]+\d+", compact)
+    if head and head.group(0) != compact and len(head.group(0)) >= 3:
+        terms.append(head.group(0))
+    return list(dict.fromkeys(terms))
+
+
 def like_pattern_is_prefix_indexable(pattern: str) -> bool:
     """True when LIKE can use a leftmost prefix (no early `%`)."""
     text = str(pattern or "")

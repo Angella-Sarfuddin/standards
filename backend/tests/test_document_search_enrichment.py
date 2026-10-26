@@ -22,8 +22,12 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
             def __init__(self):
                 self.price_calls = []
                 self.classification_fallback_calls = []
+                self.alias_lookup_calls = []
+                self.currency_lookup_ids = []
+                self.sdo_title_lookup_ids = []
 
             def get_currency_info_for_sdos(self, sdo_ids):
+                self.currency_lookup_ids.append(set(sdo_ids))
                 return {
                     sdo_id: value
                     for sdo_id, value in (currencies or {}).items()
@@ -31,6 +35,7 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
                 }
 
             def get_sdo_titles(self, sdo_ids):
+                self.sdo_title_lookup_ids.append(set(sdo_ids))
                 return {
                     sdo_id: title
                     for sdo_id, title in (sdo_titles or {}).items()
@@ -52,13 +57,20 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
                 return edition_aliases or []
 
             def get_bis_master_aliases(self, master_ids):
+                self.alias_lookup_calls.append(("BIS", list(master_ids)))
                 return []
 
             def get_api_master_price_aliases(self, master_ids):
+                self.alias_lookup_calls.append(("API", list(master_ids)))
                 return []
 
             def get_international_equivalent_price_aliases(self, master_ids):
+                self.alias_lookup_calls.append(("international", list(master_ids)))
                 return []
+
+            def get_bsi_modules_for_standards(self, master_ids):
+                self.alias_lookup_calls.append(("BSI", list(master_ids)))
+                return {}
 
             def get_prices_for_standards(
                 self,
@@ -105,6 +117,84 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
         self.assertEqual(service.build_enrichment_map([]), {})
         self.assertEqual(repository.price_calls, [])
         self.assertEqual(repository.classification_fallback_calls, [])
+
+    def test_combined_sdo_metadata_lookup_preserves_enrichment_values(self):
+        standard, master = self._standard_and_master()
+        service, repository = self._make_service(
+            [standard],
+            [master],
+        )
+        lookup_calls = []
+
+        def get_sdo_metadata_for_sdos(sdo_ids):
+            lookup_calls.append(set(sdo_ids))
+            return {
+                "titles": {7: "ISO"},
+                "currencies": {7: {"code": "CHF", "symbol": "CHF"}},
+            }
+
+        repository.get_sdo_metadata_for_sdos = get_sdo_metadata_for_sdos
+
+        result = service.build_enrichment_map([standard])
+
+        self.assertEqual(lookup_calls, [{7}])
+        self.assertEqual(result[101]["currency"], "CHF")
+        self.assertEqual(result[101]["currency_symbol"], "CHF")
+        self.assertEqual(repository.currency_lookup_ids, [])
+        self.assertEqual(repository.sdo_title_lookup_ids, [])
+
+    def test_publisher_alias_queries_are_scoped_to_relevant_sdos(self):
+        standards = []
+        masters = []
+        for standard_id, master_id, sdo_id, sdo in (
+            ("BIS-1", 1001, 21, "BIS"),
+            ("API-1", 1002, 22, "API"),
+            ("BSI-1", 1003, 23, "BSI"),
+            ("ISO-1", 1004, 24, "ISO"),
+        ):
+            standards.append(
+                SimpleNamespace(
+                    Standard_id=standard_id,
+                    sdo_id=sdo_id,
+                    standardno=f"{sdo} 12345",
+                )
+            )
+            masters.append(
+                SimpleNamespace(
+                    id=master_id,
+                    Standard_id=standard_id,
+                    sdo_id=sdo_id,
+                    standardno=f"{sdo} 12345",
+                    display_stdNo=f"{sdo} 12345 : 2024",
+                    standardyear=2024,
+                    DocumentAvailability=1,
+                )
+            )
+        service, repository = self._make_service(
+            standards,
+            masters,
+            sdo_titles={21: "BIS", 22: "API", 23: "BSI", 24: "ISO"},
+        )
+
+        service.build_enrichment_map(standards)
+
+        self.assertEqual(
+            repository.alias_lookup_calls,
+            [
+                ("BIS", [1001]),
+                ("API", [1002]),
+                ("international", [1001]),
+                ("BSI", [1003]),
+            ],
+        )
+        self.assertEqual(
+            repository.currency_lookup_ids,
+            [{21, 22, 23, 24}],
+        )
+        self.assertEqual(
+            repository.sdo_title_lookup_ids,
+            [{21, 22, 23, 24}],
+        )
 
     def test_direct_enrichment_fields_and_classification_owner_filter(self):
         standard, master = self._standard_and_master()
@@ -216,7 +306,7 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
         self.assertEqual(result[101]["currency_symbol"], "$")
         self.assertTrue(result[101]["document_available"])
         self.assertFalse(result[101]["has_database_price"])
-        self.assertEqual(repository.price_calls, [([1001], [1002])])
+        self.assertEqual(repository.price_calls, [([1001], []), ([1002], [])])
 
     def test_conflicting_duplicate_prices_are_not_resolved(self):
         standard, master = self._standard_and_master()

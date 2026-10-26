@@ -105,7 +105,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         service = DocumentSearchService.__new__(DocumentSearchService)
         service.repository = SimpleNamespace()
         service.enrichment_repository = StatusRepository()
-        service.resolve_sdo_ids = lambda _names: {"NACE": 6, "HI": 7, "TEMA": 8, "ISO": 1}
+        service.resolve_sdo_ids = lambda _names, fallback_names=None: {"NACE": 6, "HI": 7, "TEMA": 8, "ISO": 1}
         service.find_master_matches = lambda _unresolved: {}
         service._official_nace_mr0103_edition = lambda row: trace.append(("nace", row["request_key"])) or (nace_official if row["request_key"] == nace_key else None)
         service._official_hi_replacement = lambda row: trace.append(("hi", row["request_key"])) or (hi_current if row["request_key"] == hi_key else None)
@@ -148,7 +148,13 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             "revision": revision_key,
         }
 
-    def _run_search(self):
+    def _run_search(
+        self,
+        *,
+        include_ieee_target=True,
+        ieee_target_available=True,
+        ieee_relationship_type="SUPERSEDES",
+    ):
         trace = []
         local_candidate = _local(
             11, "ISO-9001-2022", 1, 1, "ISO 9001", "ISO 9001 : 2022"
@@ -170,9 +176,11 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             "ISO 3000 Part 1",
             "ISO 3000 : Part 1 : 2020",
         )
+        # Synthetic reviewed relationship fixture. This protects the generic
+        # result-assembly contract and makes no claim about an IEEE mapping.
         ieee_replacement = _local(
-            66, "IEEE-802.11-2024", 5, 5,
-            "IEEE 802.11", "IEEE 802.11 : 2024",
+            66, "SYNTHETIC-99999-2024", 5, 5,
+            "IEEE 99999", "IEEE 99999 : 2024",
         )
 
         duplicate_key = (1, "9001", None, 2015, False)
@@ -182,7 +190,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         unmatched_key = (4, "777", None, None, False)
         missing_sdo_key = (None, "9", None, None, False)
         series_key = (1, "3000", "SERIES", None, True)
-        ieee_key = (5, "80211", None, 2016, False)
+        ieee_key = (5, "99999", None, 2016, False)
         rows = [
             _prepared("ISO", 1, "ISO 9001 : 2015", duplicate_key, ("a.xlsx", 2)),
             _prepared("ISO", 1, "ISO 9001 : 2015", duplicate_key, ("a.xlsx", 3)),
@@ -192,7 +200,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             _prepared("IEC", 4, "IEC 777", unmatched_key, ("a.xlsx", 7)),
             _prepared("UNKNOWN", None, "UNKNOWN 9", missing_sdo_key, ("a.xlsx", 8)),
             _prepared("ISO", 1, "ISO 3000 SERIES", series_key, ("a.xlsx", 9), expand=True),
-            _prepared("IEEE", 5, "IEEE 802.11 : 2016", ieee_key, ("a.xlsx", 10)),
+            _prepared("IEEE", 5, "IEEE 99999 : 2016", ieee_key, ("a.xlsx", 10)),
         ]
         rows[0]["identity"]["year"] = 2015
         rows[1]["identity"]["year"] = 2015
@@ -226,7 +234,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         service = DocumentSearchService.__new__(DocumentSearchService)
         service.repository = SimpleNamespace()
         service.enrichment_repository = StatusRepository()
-        service.resolve_sdo_ids = lambda names: {"ISO": 1, "API": 2, "BIS": 3, "IEC": 4, "UNKNOWN": None}
+        service.resolve_sdo_ids = lambda names, fallback_names=None: {"ISO": 1, "API": 2, "BIS": 3, "IEC": 4, "UNKNOWN": None}
         service.find_master_matches = lambda unresolved: trace.append(("master_fallback", tuple(row["request_key"] for row in unresolved))) or master_matches
         service.build_enrichment_map = lambda standards: {
             (standard.Standard_id): {
@@ -242,8 +250,20 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         }
         service._official_nace_mr0103_edition = lambda row: trace.append(("nace", row["request_key"])) or None
         service._official_hi_replacement = lambda row: trace.append(("hi", row["request_key"])) or None
-        service._official_ieee_replacement = lambda row, metadata=None: trace.append(("ieee_replacement", row["request_key"], metadata.replacement_designation if metadata else None)) or (ieee_replacement if metadata else None)
-        service._candidate_has_database_document = lambda candidate, enrichment: trace.append(("availability", candidate.id)) or True
+        def official_ieee_replacement(row, metadata=None):
+            trace.append((
+                "ieee_replacement",
+                row["request_key"],
+                metadata.replacement_designation if metadata else None,
+            ))
+            return (
+                ieee_replacement
+                if metadata and include_ieee_target
+                else None
+            )
+
+        service._official_ieee_replacement = official_ieee_replacement
+        service._candidate_has_database_document = lambda candidate, enrichment: trace.append(("availability", candidate.id)) or (candidate.id != 66 or ieee_target_available)
         service._select_best_current_candidate = lambda candidates, row, status_map: trace.append(("select_current", row["request_key"], tuple(c.id for c in candidates))) or list(candidates)
         service._select_candidates = lambda candidates, row: trace.append(("select_family", row["request_key"], tuple(c.id for c in candidates))) or list(candidates)
         service._candidate_year = lambda candidate, sdo: getattr(candidate, "standardyear", None) or parse_identity(sdo, candidate.display_stdNo).get("year")
@@ -301,7 +321,20 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             patch.object(repository_lookup, "lookup_number_candidates", return_value=([], [], [])),
             patch.object(lookup_indexes, "build_lookup_indexes", return_value=({}, {}, {})),
             patch.object(local_matching, "match_local_standards", return_value=(unique_rows, local_matches, [])),
-            patch.object(IEEEOfficialMetadataService, "lookup", side_effect=lambda *args: trace.append(("ieee_lookup", *args)) or (SimpleNamespace(replacement_designation="IEEE 802.11 : 2024") if args[0] == "IEEE" else None)),
+            patch.object(
+                IEEEOfficialMetadataService,
+                "lookup",
+                side_effect=lambda *args: trace.append(("ieee_lookup", *args)) or (
+                    SimpleNamespace(
+                        replacement_designation="IEEE 99999 : 2024",
+                        relationship_type=ieee_relationship_type,
+                        verification_state="VERIFIED",
+                        evidence_url="https://publisher.example/synthetic/99999",
+                    )
+                    if args[0] == "IEEE"
+                    else None
+                ),
+            ),
         ]
         prepared_snapshots = copy.deepcopy(rows)
         with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5]:
@@ -330,8 +363,8 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
                 ("IEC", "IEC 777", False, "NOT FOUND"),
                 ("UNKNOWN", "UNKNOWN 9", False, "SDO NOT FOUND"),
                 ("ISO", "ISO 3000 SERIES", True, "AVAILABLE"),
-                ("IEEE", "IEEE 802.11 : 2024", True, "AVAILABLE"),
-                ("IEEE", "IEEE 802.11 : 2016", False, "NOT FOUND"),
+                ("IEEE", "IEEE 99999 : 2024", True, "AVAILABLE"),
+                ("IEEE", "IEEE 99999 : 2016", False, "NOT FOUND"),
             ],
         )
         self.assertEqual(
@@ -370,10 +403,20 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             "actions": {},
             "source_row_identity": ["a.xlsx", 2],
         })
-        self.assertEqual(results[1]["replacement_standard"], "ISO 9001 : 2022")
+        self.assertEqual(
+            results[1]["status_detail"],
+            "Requested edition 2015 does not match the available edition 2022.",
+        )
+        self.assertIsNone(results[1]["replacement_standard"])
+        self.assertIsNone(results[1]["superseded_by"])
         self.assertEqual(results[4]["standard"]["catalog_status"], "ACTIVE")
         self.assertEqual(results[5]["standard"], None)
-        self.assertEqual(results[5]["status_detail"], "Requested edition 2020 is superseded; latest available edition is 2022.")
+        self.assertEqual(
+            results[5]["status_detail"],
+            "Requested edition 2020 does not match the available edition 2022.",
+        )
+        self.assertIsNone(results[5]["replacement_standard"])
+        self.assertIsNone(results[5]["superseded_by"])
         self.assertEqual(results[6]["standard"], None)
         self.assertEqual(results[7]["replacement_standard"], "IS/IEC 60137 : 2017")
         self.assertEqual(results[8]["standard"], None)
@@ -384,9 +427,8 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             "source_row_identity": ["a.xlsx", 8],
         })
         self.assertEqual(results[10]["standard"]["display_stdNo"], "ISO 3000 : Part 1 : 2020")
-        self.assertEqual(results[11]["standard"]["display_stdNo"], "IEEE 802.11 : 2024")
+        self.assertEqual(results[11]["standard"]["display_stdNo"], "IEEE 99999 : 2024")
         self.assertEqual(results[11]["status_detail"], "Requested year 2016; returned latest available edition 2024.")
-        self.assertEqual(results[12]["replacement_standard"], "IEEE 802.11 : 2024")
         self.assertEqual(enrichment_calls, [(11, 22, 33, 44, 55, 66)])
         self.assertEqual(
             [event for event in trace if event[0] in {"nace", "hi", "ieee_lookup", "ieee_replacement"}],
@@ -394,7 +436,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
                 *(('nace', rows[index]['request_key']) for index in (0, 2, 3, 4, 5, 6, 7, 8)),
                 *(('hi', rows[index]['request_key']) for index in (0, 2, 3, 4, 5, 6, 7, 8)),
                 *(('ieee_lookup', rows[index]['search_sdo_name'], rows[index]['result_displaystdno']) for index in (0, 2, 3, 4, 5, 6, 7, 8)),
-                ("ieee_replacement", rows[8]["request_key"], "IEEE 802.11 : 2024"),
+                ("ieee_replacement", rows[8]["request_key"], "IEEE 99999 : 2024"),
                 *(('hi', row['request_key']) for row in (rows[0], rows[2], rows[3], rows[4], rows[5], rows[7], rows[8])),
             ],
         )
@@ -423,7 +465,64 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         )
         self.assertEqual([row.get("requested_edition_status") for row in rows], [None] * len(rows))
 
+    def test_synthetic_replacement_target_must_be_available_to_match(self):
+        for include_target, available, detail_fragment in (
+            (False, True, "not available in the local catalogue"),
+            (True, False, "not available in the local catalogue"),
+        ):
+            with self.subTest(include_target=include_target, available=available):
+                results, _trace, _enrichment_calls, _rows = self._run_search(
+                    include_ieee_target=include_target,
+                    ieee_target_available=available,
+                )
+                result = next(
+                    item
+                    for item in results
+                    if item["requested_standard"] == "IEEE 99999 : 2016"
+                )
+                self.assertFalse(result["matched"])
+                self.assertEqual(
+                    result["replacement_standard"], "IEEE 99999 : 2024"
+                )
+                self.assertIn(detail_fragment, result["status_detail"])
+
+    def test_synthetic_verified_replacement_populates_relationship_fields(self):
+        results, _trace, _enrichment_calls, _rows = self._run_search()
+        not_found = next(
+            item
+            for item in results
+            if item["requested_standard"] == "IEEE 99999 : 2016"
+        )
+
+        self.assertFalse(not_found["matched"])
+        self.assertEqual(not_found["status"], "NOT FOUND")
+        self.assertEqual(
+            not_found["replacement_standard"], "IEEE 99999 : 2024"
+        )
+        self.assertEqual(not_found["superseded_by"], "IEEE 99999 : 2024")
+
+    def test_synthetic_incorporation_is_not_reported_as_supersession(self):
+        results, _trace, _enrichment_calls, _rows = self._run_search(
+            ieee_relationship_type="INCORPORATED_INTO"
+        )
+        not_found = next(
+            item
+            for item in results
+            if item["requested_standard"] == "IEEE 99999 : 2016"
+        )
+
+        self.assertFalse(not_found["matched"])
+        self.assertIn("incorporated into", not_found["status_detail"])
+        self.assertEqual(
+            not_found["replacement_standard"], "IEEE 99999 : 2024"
+        )
+        self.assertIsNone(not_found["superseded_by"])
+
     def test_positive_nace_hi_tema_and_standalone_revision_assembly(self):
+        # NACE canonical identity, HI replacement, and the TEMA naming
+        # transition below exercise current production behavior pending
+        # publisher-evidence and product-contract review; they do not claim
+        # those real-world facts have been independently verified.
         results, trace, keys = self._run_special_search()
         self.assertEqual(
             [(result["requested_sdo"], result["requested_standard"], result["matched"], result["status"]) for result in results],

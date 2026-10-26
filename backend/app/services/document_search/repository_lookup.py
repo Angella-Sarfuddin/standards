@@ -1,6 +1,61 @@
 """Repository lookups used by the document-search workflow."""
 
+from app.utils.standard_formatter import normalize_display_number
 from app.utils.standard_identity import normalize_tokens
+
+
+def row_has_display_candidates(row, candidate_map):
+    """Whether a request has candidates for any normalized display variant."""
+    sdo_id = row.get("sdo_id")
+
+    if not sdo_id:
+        return False
+
+    for variant in row["identity"].get("variants", []):
+        if candidate_map.get((sdo_id, normalize_tokens(variant))):
+            return True
+
+    return False
+
+
+def direct_candidate_lists(
+    row,
+    candidate_map,
+    exact_result_map,
+    normalized_result_map,
+    standard_number_map,
+):
+    """Collect the four direct candidate groups for a prepared request."""
+    display_candidates = []
+
+    for variant in row["identity"].get("variants", []):
+        candidate_key = (
+            row["sdo_id"],
+            normalize_tokens(variant),
+        )
+        display_candidates.extend(candidate_map.get(candidate_key, []))
+
+    full_display_number = row["full_display_number"]
+
+    exact_key = (
+        row["sdo_id"],
+        normalize_display_number(full_display_number),
+    )
+    normalized_key = (
+        row["sdo_id"],
+        normalize_tokens(full_display_number).replace(" ", ""),
+    )
+    standard_number_key = (
+        row["sdo_id"],
+        normalize_display_number(full_display_number),
+    )
+
+    return (
+        display_candidates,
+        exact_result_map.get(exact_key, []),
+        normalized_result_map.get(normalized_key, []),
+        standard_number_map.get(standard_number_key, []),
+    )
 
 
 def lookup_display_candidates(

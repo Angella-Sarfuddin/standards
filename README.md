@@ -1,26 +1,19 @@
-# Standards Intelligence Backend
+# Standards Intelligence
 
-Standards Intelligence is a full-stack application for extracting standard designations from documents, finding catalog matches, reviewing availability and pricing, and exporting quotation and not-found workbooks.
+Standards Intelligence extracts standard designations from documents, searches the standards catalogue, presents match and availability information, and generates Excel/ZIP exports. The repository contains a FastAPI backend in `backend/` and a React/Vite frontend in `frontend/`.
 
-## Project layout
+For detailed source-backed documentation, see [Technical handover](docs/TECHNICAL_HANDOVER.md), [API reference](docs/API_REFERENCE.md), [Database reference](docs/DATABASE_REFERENCE.md), and [Known limitations](docs/KNOWN_LIMITATIONS.md).
 
-- `backend/app/` contains the FastAPI application and its routes, controllers, repositories, models, services, extractors, and utilities.
-- `backend/app/services/document_search/` contains the extracted document-search helpers.
-- `backend/tests/` contains the Python test suite.
-- `frontend/` contains the React and Vite application.
-- `backend/scripts/inspect_databases.py` is a database inspection utility.
+## Prerequisites
 
-The API reads standards and enrichment records from configured databases. Uploaded Excel, CSV, PDF, Word, and TXT files are processed by the backend extractors; generated Excel exports are returned as in-memory responses. Legacy Office conversion uses the system temporary directory and the ignored repository `.standards-tmp/` fallback.
+- Python **3.12 or newer** is the version stated by the project README. The pinned requirements do not independently declare a Python version constraint.
+- Node.js and npm for the frontend. The repository does not pin their versions.
+- Access to the configured standards database for database-backed API operations. The repository's example connection URL uses MySQL with PyMySQL; the deployed engine and network requirements must be confirmed with the deployment owner.
+- LibreOffice is optional. It is used for legacy `.doc` and `.xls` conversion when installed; ordinary `.docx` and `.xlsx` processing does not require it.
 
-## Requirements
+## Install backend dependencies
 
-- Python 3.12 or newer and a supported database server.
-- Node.js and npm.
-- LibreOffice is optional and is used for legacy `.doc` conversion when available.
-
-## Configure the backend
-
-Create and activate a virtual environment from the repository root, then install the backend dependencies:
+Run these PowerShell commands from the repository root:
 
 ```powershell
 python -m venv .venv
@@ -28,31 +21,56 @@ python -m venv .venv
 python -m pip install -r backend/requirements.txt
 ```
 
-Set `DATABASE_URL` and `ENRICHMENT_DATABASE_URL` in the root `.env`. The existing local `.env` is kept at the repository root. For a new checkout, copy `backend/.env.example` to `.env` and replace its safe placeholders with local database settings. Do not commit credentials.
+The root `requirements.txt` is a compatibility include of `backend/requirements.txt`.
 
-Start the API from the repository root:
+## Configure the backend
+
+The application requires `DATABASE_URL`. The database module loads `.env` from the repository root when present; otherwise it checks `backend/.env`. If neither exists, the process environment must provide `DATABASE_URL`. The application creates one SQLAlchemy engine and uses the request's database session for search and enrichment.
+
+For a new checkout, create a local file from the safe example only if a root `.env` does not already exist:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item backend/.env.example .env }
+```
+
+Edit the local file or set `DATABASE_URL` in the process environment. Never commit credentials. The example also contains `ENRICHMENT_DATABASE_URL`; application startup does not require or read it. The database inspection utility under `backend/scripts/` does read it.
+
+Optional settings:
+
+- `LIBREOFFICE_PATH` points to a LibreOffice executable if it is not discoverable on `PATH`.
+- `STANDARDS_TEMP_DIR` selects a preferred temporary directory for legacy Office conversion.
+
+See [Database reference](docs/DATABASE_REFERENCE.md) for model and configuration details.
+
+## Start the backend
+
+From the repository root, with the virtual environment active and `DATABASE_URL` configured:
 
 ```powershell
 python -m uvicorn app.main:app --reload
 ```
 
-The API is available at `http://127.0.0.1:8000`; FastAPI's interactive documentation is at `/docs`.
+The compatibility package at the repository root resolves `app` to `backend/app`. The application normally listens at `http://127.0.0.1:8000`; `/` redirects to `/docs`. The repository does not define production worker, process-manager, or deployment settings.
 
-## Configure the frontend
+## Start the frontend
 
-Install and start the Vite application:
+In a separate PowerShell window:
 
 ```powershell
-cd frontend
+Set-Location frontend
 npm install
 npm run dev
 ```
 
-The frontend calls `/api` on the same origin as the page. In development, Vite proxies that path to `http://127.0.0.1:8000`, so the UI works over both HTTP and HTTPS. To point at a different API host, copy `frontend/.env.example` to `frontend/.env.local`, set `VITE_API_BASE_URL`, and restart Vite. Direct browser calls are allowed from `http` and `https` origins on localhost and 127.0.0.1.
+During Vite development, frontend requests use `/api`; the Vite proxy forwards them to `http://127.0.0.1:8000` and removes the `/api` prefix. `/api` is not a FastAPI route prefix. To use a different API host, create `frontend/.env.local`, set `VITE_API_BASE_URL`, and restart Vite. The checked-in frontend example contains only a commented placeholder.
 
-Available frontend scripts are `npm run dev`, `npm run build`, `npm run lint`, and `npm run preview`.
+### Production API routing
 
-## Run tests
+The Vite `server.proxy` setting applies only to the development server; it does not proxy requests from a production build. With the default `VITE_API_BASE_URL=/api`, the browser requests paths such as `/api/documents/search`, while FastAPI registers `/documents/search` without the `/api` prefix. A production web server or reverse proxy must therefore forward `/api/*` to the backend and strip the leading `/api` while preserving the remaining route path. Alternatively, set `VITE_API_BASE_URL` before `npm run build` to the backend API base that serves the registered paths directly. Vite embeds this setting in the build. No production proxy or deployment configuration is present in this repository; the deployment owner must configure and verify this routing.
+
+Other frontend scripts, defined in `frontend/package.json`, are `npm run build`, `npm run lint`, and `npm run preview`.
+
+## Run backend tests
 
 From the repository root, with the backend virtual environment active:
 
@@ -60,4 +78,4 @@ From the repository root, with the backend virtual environment active:
 python -m unittest discover -s backend/tests -v
 ```
 
-The top-level `requirements.txt`, `main.py`, `database.py`, and `app` package are compatibility entry points for existing repository-root commands and imports. New backend code lives under `backend/app/`.
+The suite uses `unittest`; see [Technical handover](docs/TECHNICAL_HANDOVER.md#tests) for the test areas. No test result is asserted by this documentation.

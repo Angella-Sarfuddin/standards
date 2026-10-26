@@ -2,6 +2,7 @@ import re
 
 from sqlalchemy import and_, bindparam, or_, select, text
 
+from app.repositories.identity_lookup import fetch_long_core_candidates
 from app.utils.db_retry import run_with_retry
 
 from app.models.standard_master import StandardMaster
@@ -312,7 +313,7 @@ class EnrichmentRepository:
         Find master candidates using designation-neutral
         identity hints.
 
-        Fast path: containment ``%{core}%`` scans batched per SDO.
+        Long cores use an index prefix plus a fulltext lookup.
         Short cores keep selective prefix-bound patterns.
         Python ``identity_core_appears`` is the accuracy gate.
 
@@ -350,8 +351,9 @@ class EnrichmentRepository:
 
             bucket = grouped.setdefault(
                 int(sdo_id),
-                {"containment": {}, "bound": {}},
+                {"containment": {}, "bound": {}, "prefixes": set()},
             )
+            bucket["prefixes"].add(sdo_prefix)
             key = (core, year)
 
             if containment:
@@ -364,83 +366,60 @@ class EnrichmentRepository:
 
         results = []
         seen = set()
-        containment_chunk = 40
         bound_chunk = 5
 
         for sdo_id, bucket in grouped.items():
-            containment_items = list(bucket["containment"].items())
-            for start in range(
-                0,
-                len(containment_items),
-                containment_chunk,
-            ):
-                batch = containment_items[
-                    start:start + containment_chunk
-                ]
-                filters = []
-                cores_in_batch = []
-                years = {year for (_core, year), _pat in batch}
-
-                for (core, _year), pattern in batch:
-                    cores_in_batch.append(core)
-                    contain = f"%{pattern}%"
-                    filters.append(
-                        StandardMaster.display_stdNo.like(contain)
+            cores_in_batch = list(
+                dict.fromkeys(core for (core, _year) in bucket["containment"])
+            )
+            years = {year for (_core, year) in bucket["containment"]}
+            extra_filters = [self._master_searchable_filter()]
+            if len(years) == 1:
+                shared_year = next(iter(years))
+                if shared_year is not None:
+                    extra_filters.append(
+                        StandardMaster.standardyear == shared_year
                     )
-                    filters.append(
-                        StandardMaster.standardno.like(contain)
-                    )
+            rows = fetch_long_core_candidates(
+                self.db,
+                model=StandardMaster,
+                sdo_id=sdo_id,
+                cores=cores_in_batch,
+                sdo_prefixes=bucket["prefixes"],
+                text_columns=(
+                    StandardMaster.display_stdNo,
+                    StandardMaster.standardno,
+                ),
+                fulltext_column=StandardMaster.display_stdNo,
+                extra_filters=tuple(extra_filters),
+            )
 
-                if not filters:
+            for row in rows:
+                if row.id in seen:
                     continue
 
-                query_filters = [
-                    self._master_searchable_filter(),
-                    StandardMaster.sdo_id == sdo_id,
-                    or_(*filters),
-                ]
-                if len(years) == 1:
-                    shared_year = next(iter(years))
-                    if shared_year is not None:
-                        query_filters.insert(
-                            2,
-                            StandardMaster.standardyear == shared_year,
-                        )
+                display_value = str(
+                    row.display_stdNo or ""
+                ).strip()
+                standard_value = str(
+                    row.standardno or ""
+                ).strip()
 
-                rows = run_with_retry(
-                    self.db,
-                    lambda query_filters=query_filters: (
-                        self.db.query(StandardMaster)
-                        .filter(*query_filters)
-                    ),
-                )
+                if not display_value and not standard_value:
+                    continue
 
-                for row in rows:
-                    if row.id in seen:
-                        continue
+                if not any(
+                    identity_core_appears(display_value, core)
+                    or identity_core_appears(
+                        standard_value,
+                        core,
+                    )
+                    for core in cores_in_batch
+                ):
+                    continue
 
-                    display_value = str(
-                        row.display_stdNo or ""
-                    ).strip()
-                    standard_value = str(
-                        row.standardno or ""
-                    ).strip()
-
-                    if not display_value and not standard_value:
-                        continue
-
-                    if not any(
-                        identity_core_appears(display_value, core)
-                        or identity_core_appears(
-                            standard_value,
-                            core,
-                        )
-                        for core in cores_in_batch
-                    ):
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                seen.add(row.id)
+                results.append(row)
 
             bound_items = list(bucket["bound"].items())
             for start in range(0, len(bound_items), bound_chunk):
@@ -844,7 +823,8 @@ class EnrichmentRepository:
         sdo_titles = self.get_sdo_titles(
             {row.sdo_id for row in matched if row.sdo_id is not None}
         )
-        filters = []
+        aliases_by_id = {}
+        grouped = {}
         for row in matched:
             if row.sdo_id is None:
                 continue
@@ -856,46 +836,32 @@ class EnrichmentRepository:
             ).strip()
             if not core:
                 continue
-
-            # Try the source spelling and compact spelling. Split-component
-            # patterns also cover catalogs that omit punctuation in one field;
-            # the enrichment identity check below prevents near-number matches
-            # from supplying a price.
-            patterns = {
-                f"%{core}%",
-                f"%{re.sub(r'[^A-Z0-9]', '', core, flags=re.I)}%",
-            }
-            components = re.findall(r"[A-Z]+|\d+", core, re.I)
-            if len(components) > 1:
-                patterns.add("%" + "%".join(components) + "%")
-            filters.append(
-                and_(
-                    StandardMaster.sdo_id == row.sdo_id,
-                    or_(
-                        *(
-                            field.ilike(pattern)
-                            for pattern in patterns
-                            for field in (
-                                StandardMaster.standardno,
-                                StandardMaster.display_stdNo,
-                            )
-                        )
-                    ),
-                )
+            bucket = grouped.setdefault(
+                row.sdo_id,
+                {"prefix": sdo_name, "cores": []},
             )
+            bucket["cores"].append(core)
 
-        if not filters:
-            return []
-
-        aliases_by_id = {}
-        for offset in range(0, len(filters), 200):
-            batch = filters[offset:offset + 200]
-            aliases = run_with_retry(
+        for sdo_id, bucket in grouped.items():
+            rows = fetch_long_core_candidates(
                 self.db,
-                lambda batch=batch: self.db.query(StandardMaster)
-                .filter(or_(*batch)),
+                model=StandardMaster,
+                sdo_id=sdo_id,
+                cores=bucket["cores"],
+                sdo_prefixes={bucket["prefix"]} if bucket["prefix"] else set(),
+                text_columns=(
+                    StandardMaster.display_stdNo,
+                    StandardMaster.standardno,
+                ),
+                fulltext_column=StandardMaster.display_stdNo,
             )
-            aliases_by_id.update((alias.id, alias) for alias in aliases)
+            for alias in rows:
+                if any(
+                    identity_core_appears(value, core)
+                    for value in (alias.display_stdNo, alias.standardno)
+                    for core in bucket["cores"]
+                ):
+                    aliases_by_id[alias.id] = alias
         return list(aliases_by_id.values())
 
     def get_standard_status_map(self, status_ids):
@@ -951,6 +917,37 @@ class EnrichmentRepository:
                 "symbol": row.currency_symbol,
             }
             for row in rows
+        }
+
+    def get_sdo_metadata_for_sdos(self, sdo_ids):
+        """Fetch SDO titles and currency details in one database round trip."""
+        if not sdo_ids:
+            return {"titles": {}, "currencies": {}}
+
+        rows = run_with_retry(
+            self.db,
+            lambda: self.db.query(
+                SDO.id,
+                SDO.sdo_title,
+                Currency.currency_code,
+                Currency.currency_symbol,
+            )
+            .outerjoin(
+                Currency,
+                SDO.currency_id == Currency.id,
+            )
+            .filter(SDO.id.in_(sdo_ids)),
+        )
+
+        return {
+            "titles": {row.id: row.sdo_title for row in rows},
+            "currencies": {
+                row.id: {
+                    "code": row.currency_code,
+                    "symbol": row.currency_symbol,
+                }
+                for row in rows
+            },
         }
 
     def get_sdo_titles(self, sdo_ids):

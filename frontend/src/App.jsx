@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import axios from "axios";
 import { toast } from "sonner";
 
 import {
   searchStandards,
+  searchDocumentRequest,
+  extractDocument,
   exportFoundAndNotFoundBundle,
   exportLatestYearStandards,
-  API_BASE_URL,
 } from "./api/index.js";
 import { TABLE_PAGE_SIZE } from "./constants.js";
 import { buildAnalysis } from "./utils/analysis.js";
@@ -22,7 +22,59 @@ import TopBar from "./components/TopBar.jsx";
 import Workspace from "./components/workspace/Workspace.jsx";
 import { Toaster } from "@/components/ui/sonner";
 
+const getApiErrorMessage = (error, fallback) => {
+  const detail = error?.response?.data?.detail;
+
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+
+  if (Array.isArray(detail)) {
+    const messages = [
+      ...new Set(
+        detail
+          .map((item) =>
+            typeof item?.msg === "string" ? item.msg.trim() : ""
+          )
+          .filter(Boolean)
+      ),
+    ];
+
+    if (messages.length) {
+      return messages.join("; ");
+    }
+  }
+
+  return fallback;
+};
+
+const isNotFoundResult = (result) =>
+  result.status === "NOT FOUND" ||
+  result.status === "SDO NOT FOUND" ||
+  !result.matched;
+const isSdoMissingResult = (result) => result.status === "SDO NOT FOUND";
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const SUPPORTED_UPLOAD_EXTENSIONS = new Set([
+  ".xlsx",
+  ".xls",
+  ".csv",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".txt",
+]);
+
 function App() {
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem("standards-intelligence-theme");
+    return saved === "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+    localStorage.setItem("standards-intelligence-theme", isDark ? "dark" : "light");
+  }, [isDark]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
 
@@ -41,7 +93,10 @@ function App() {
   const resultsPageStart = resultsPage * TABLE_PAGE_SIZE;
 
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [isQuickSearching, setIsQuickSearching] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [isSearchingDocuments, setIsSearchingDocuments] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [error, setError] = useState("");
 
   const [selectedResults, setSelectedResults] = useState([]);
@@ -92,7 +147,7 @@ function App() {
       return;
     }
 
-    setLoading(true);
+    setIsQuickSearching(true);
     setError("");
     setSearchResult(null);
 
@@ -101,20 +156,37 @@ function App() {
       setSearchResult(Array.isArray(response) ? response : []);
     } catch (err) {
       console.error(err);
-      setError(err.response?.data?.detail || "Unable to search the standard.");
+      setError(getApiErrorMessage(err, "Unable to search the standard."));
     } finally {
-      setLoading(false);
+      setIsQuickSearching(false);
     }
   };
 
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
+  const handleFileChange = async (eventOrFile) => {
+    const file = eventOrFile?.target?.files
+      ? eventOrFile.target.files[0]
+      : eventOrFile;
+
+    if (eventOrFile?.currentTarget) {
+      eventOrFile.currentTarget.value = "";
+    }
 
     if (!file) {
       return;
     }
 
-    event.currentTarget.value = "";
+    const extension = file.name?.match(/\.[^.]+$/)?.[0]?.toLowerCase();
+    if (!SUPPORTED_UPLOAD_EXTENSIONS.has(extension)) {
+      setError(
+        "Unsupported file type. Choose XLSX, XLS, CSV, PDF, DOC, DOCX, or TXT."
+      );
+      return;
+    }
+
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError("The file is too large. Choose a file no larger than 10 MB.");
+      return;
+    }
 
     setSelectedFile(file);
     setPreviewRows([]);
@@ -128,17 +200,11 @@ function App() {
     setWorkspaceVisible(false);
     setOpenGroupIndex(null);
     setError("");
-    setLoading(true);
-
-    const formData = new FormData();
-    formData.append("file", file);
+    setIsExtracting(true);
 
     try {
-      const response = await axios.post(
-        `${API_BASE_URL}/documents/extract`,
-        formData
-      );
-      const rows = response.data.results || [];
+      const response = await extractDocument(file);
+      const rows = response.results || [];
 
       setPreviewRows(rows);
       setPreviewPage(0);
@@ -151,10 +217,10 @@ function App() {
       setSelectedFile(null);
       setPreviewRows([]);
       setError(
-        err.response?.data?.detail || "Unable to read the uploaded document."
+        getApiErrorMessage(err, "Unable to read the uploaded document.")
       );
     } finally {
-      setLoading(false);
+      setIsExtracting(false);
     }
   };
 
@@ -164,7 +230,7 @@ function App() {
     }
 
     setSearchRequestCount(previewRows.length);
-    setLoading(true);
+    setIsSearchingDocuments(true);
     setError("");
     setSearchResults([]);
     setResultsPage(0);
@@ -174,14 +240,14 @@ function App() {
     setOpenGroupIndex(null);
 
     try {
-      const response = await axios.post(`${API_BASE_URL}/documents/search`, {
-        filename: selectedFile?.name || null,
-        rows: previewRows,
-      });
+      const response = await searchDocumentRequest(
+        previewRows,
+        selectedFile?.name || null
+      );
 
-      const results = response.data.results || [];
+      const results = response.results || [];
       setSearchRequestCount(
-        response.data.input_requests ?? previewRows.length
+        response.input_requests ?? previewRows.length
       );
 
       const displayResults = await expandSeriesResultsForExport(results);
@@ -202,10 +268,13 @@ function App() {
     } catch (err) {
       console.error(err);
       setError(
-        err.response?.data?.detail || "Unable to search the uploaded document."
+        getApiErrorMessage(
+          err,
+          "Unable to search the uploaded document."
+        )
       );
     } finally {
-      setLoading(false);
+      setIsSearchingDocuments(false);
     }
   };
 
@@ -218,20 +287,9 @@ function App() {
     const normalizeSeriesRows = async () => {
       try {
         const expanded = await expandSeriesResultsForExport(searchResults);
-        const expandedSelections =
-          await expandSeriesResultsForExport(selectedResults);
         const changed =
           expanded.length !== searchResults.length ||
           expanded.some((result, index) => result !== searchResults[index]);
-        const selectionChanged =
-          expandedSelections.length !== selectedResults.length ||
-          expandedSelections.some(
-            (result, index) => result !== selectedResults[index]
-          );
-
-        if (!cancelled && selectionChanged) {
-          setSelectedResults(expandedSelections);
-        }
 
         if (!cancelled && changed) {
           const normalized = expanded.map((result, index) => ({
@@ -251,7 +309,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [searchResults, selectedResults]);
+  }, [searchResults]);
 
   useEffect(() => {
     if (!error) {
@@ -267,16 +325,9 @@ function App() {
 
   const matchedCount = searchResults.filter((result) => result.matched).length;
 
-  const notFoundResults = searchResults.filter(
-    (result) =>
-      result.status === "NOT FOUND" ||
-      result.status === "SDO NOT FOUND" ||
-      !result.matched
-  ).length;
+  const notFoundResults = searchResults.filter(isNotFoundResult).length;
 
-  const sdoNotFoundCount = searchResults.filter(
-    (result) => result.status === "SDO NOT FOUND"
-  ).length;
+  const sdoNotFoundCount = searchResults.filter(isSdoMissingResult).length;
 
   const selectedResultIdSet = new Set(selectedResults.map(getResultKey));
 
@@ -284,9 +335,9 @@ function App() {
     resultViewFilter === "found"
       ? searchResults.filter((result) => result.matched)
       : resultViewFilter === "not_found"
-        ? searchResults.filter((result) => !result.matched)
+        ? searchResults.filter(isNotFoundResult)
         : resultViewFilter === "sdo_missing"
-          ? searchResults.filter((result) => result.status === "SDO NOT FOUND")
+          ? searchResults.filter(isSdoMissingResult)
           : resultViewFilter === "selected"
             ? searchResults.filter((result) =>
                 selectedResultIdSet.has(getResultKey(result))
@@ -305,7 +356,7 @@ function App() {
     setResultsPage(0);
   };
 
-  const selectableResults = filteredSearchResults.filter(
+  const selectableResults = visibleSearchResults.filter(
     (result) => result.matched && result.standard
   );
 
@@ -362,22 +413,23 @@ function App() {
   };
 
   const handleExportSelected = async () => {
-    if (!searchResults.length) {
+    if (!selectedResults.length) {
       return;
     }
 
-    setLoading(true);
+    setIsExporting(true);
     setError("");
 
     try {
+      const quotationResults = await expandSeriesResultsForExport(
+        selectedResults
+      );
+
       if (exportMode === "latest-years") {
-        await exportLatestYearStandards(searchResults);
+        await exportLatestYearStandards(quotationResults);
       } else {
         const refreshedResults =
           await expandSeriesResultsForExport(searchResults);
-        const quotationResults = selectedResults.length
-          ? await expandSeriesResultsForExport(selectedResults)
-          : refreshedResults.filter((result) => result.matched);
         await exportFoundAndNotFoundBundle(quotationResults, refreshedResults);
         setExportedDashboard(buildAnalysis(quotationResults));
         setOpenGroupIndex(null);
@@ -385,27 +437,29 @@ function App() {
     } catch (err) {
       console.error(err);
       setError(
-        err.response?.data?.detail || "Unable to export selected standards."
+        getApiErrorMessage(err, "Unable to export selected standards.")
       );
     } finally {
-      setLoading(false);
+      setIsExporting(false);
     }
   };
 
-  const handleManualSearch = (rowIndex, result) => {
-    setManualSearchRow(rowIndex);
+  const handleManualSearch = (result) => {
+    setManualSearchRow(getResultKey(result));
     setManualSearchValue(result.requested_standard || "");
     setError("");
   };
 
-  const handleManualSearchSubmit = async (rowIndex) => {
+  const handleManualSearchSubmit = async (resultKey) => {
     const value = manualSearchValue.trim();
 
     if (!value) {
       return;
     }
 
-    const currentRow = searchResults[rowIndex];
+    const currentRow = searchResults.find(
+      (row) => getResultKey(row) === resultKey
+    );
 
     if (!currentRow) {
       return;
@@ -424,53 +478,46 @@ function App() {
           : [];
       const result = results[0] || null;
 
-      setSearchResults((previous) =>
-        previous.map((row, index) => {
-          if (index !== rowIndex) {
-            return row;
-          }
+      const updatedSearchResults = searchResults.map((row) => {
+        if (getResultKey(row) !== resultKey) {
+          return row;
+        }
 
-          if (result?.matched && result.standard) {
-            const standard = result.standard;
-
-            return {
-              ...row,
-              requested_standard: value,
-              requested_sdo:
-                getSdoFromStandardNumber(standard.standardno) ||
-                row.requested_sdo,
-              matched: true,
-              status: result.status || "AVAILABLE",
-              standard,
-              manual_search: true,
-            };
-          }
+        if (result?.matched && result.standard) {
+          const standard = result.standard;
 
           return {
             ...row,
             requested_standard: value,
-            matched: false,
-            status: "NOT FOUND",
-            standard: null,
+            requested_sdo:
+              getSdoFromStandardNumber(standard.standardno) ||
+              row.requested_sdo,
+            matched: true,
+            status: result.status || "AVAILABLE",
+            standard,
             manual_search: true,
           };
-        })
-      );
+        }
 
-      setExportedDashboard(
-        buildAnalysis(
-          searchResults.map((row, index) =>
-            index === rowIndex ? result : row
-          )
-        )
-      );
+        return {
+          ...row,
+          requested_standard: value,
+          matched: false,
+          status: "NOT FOUND",
+          standard: null,
+          manual_search: true,
+        };
+      });
+
+      setSearchResults(updatedSearchResults);
+      setExportedDashboard(buildAnalysis(updatedSearchResults));
 
       setManualSearchRow(null);
       setManualSearchValue("");
     } catch (err) {
       console.error(err);
       setError(
-        err.response?.data?.detail || "Unable to perform manual search."
+        getApiErrorMessage(err, "Unable to perform manual search.")
       );
     } finally {
       setManualSearchLoading(false);
@@ -483,9 +530,9 @@ function App() {
   };
 
   return (
-    <div className="min-h-svh bg-background text-foreground">
+    <div className="app-shell relative min-h-svh bg-background text-foreground">
       <Toaster />
-      <TopBar />
+      <TopBar isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
 
       {!workspaceVisible ? (
         <Landing
@@ -495,18 +542,20 @@ function App() {
           searchResult={searchResult}
           selectedFile={selectedFile}
           onFileChange={handleFileChange}
+          isExtracting={isExtracting}
           previewRows={previewRows}
           visiblePreviewRows={visiblePreviewRows}
           previewPageStart={previewPageStart}
           previewPage={previewPage}
           onPreviewPageChange={setPreviewPage}
           onVerify={handleStartSearch}
-          loading={loading}
+          isQuickSearching={isQuickSearching}
+          isSearchingDocuments={isSearchingDocuments}
         />
       ) : (
         <Workspace
           fileName={selectedFile?.name}
-          loading={loading}
+          isExporting={isExporting}
           onBack={() => setWorkspaceVisible(false)}
           onNewSearch={handleNewDocument}
           onExport={handleExportSelected}
@@ -515,7 +564,6 @@ function App() {
           filteredCount={filteredSearchResults.length}
           visibleResults={visibleSearchResults}
           resultsPage={resultsPage}
-          resultsPageStart={resultsPageStart}
           onResultsPageChange={setResultsPage}
           resultViewFilter={resultViewFilter}
           matchedCount={matchedCount}
@@ -550,3 +598,4 @@ function App() {
 }
 
 export default App;
+

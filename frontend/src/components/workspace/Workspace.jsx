@@ -5,24 +5,18 @@ import WorkspaceHeader from "./WorkspaceHeader.jsx";
 export default function Workspace(props) {
   const {
     fileName,
-    selectedCount,
-    loading,
     onBack,
     onNewSearch,
-    onExport,
   } = props;
 
   return (
-    <main className="mx-auto flex w-full max-w-[1400px] flex-col gap-6 px-6 py-6">
+    <main className="mx-auto flex w-full max-w-[1600px] min-w-0 flex-col gap-5 px-4 py-5 sm:gap-6 sm:px-6 sm:py-7 lg:px-8">
       <WorkspaceHeader
         fileName={fileName}
-        selectedCount={selectedCount}
-        loading={loading}
         onBack={onBack}
         onNewSearch={onNewSearch}
-        onExport={onExport}
       />
-      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.7fr)]">
+      <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(320px,0.72fr)] xl:gap-5">
         <ResultsPanel {...props} />
         <DashboardPanel {...props} />
       </div>

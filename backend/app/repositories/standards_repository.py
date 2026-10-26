@@ -1,5 +1,10 @@
+import threading
+import time
+import weakref
+
 from sqlalchemy import or_
 
+from app.repositories.identity_lookup import fetch_long_core_candidates
 from app.utils.db_retry import run_with_retry
 
 from app.models.standard import Standard
@@ -9,6 +14,11 @@ from app.utils.standard_identity import (
     identity_discovery_terms,
     normalize_tokens,
 )
+
+
+_SDO_ROWS_CACHE_TTL_SECONDS = 60
+_sdo_rows_cache = weakref.WeakKeyDictionary()
+_sdo_rows_cache_lock = threading.Lock()
 
 
 class StandardsRepository:
@@ -191,15 +201,14 @@ class StandardsRepository:
     def search_by_sdo_and_identity_hints(self, hints):
         """Find local candidates via designation-neutral identity hints.
 
-        Fast path: one (or few) containment scans per SDO using
-        ``%{core_pattern}%`` on display/standardno/normalized. Short cores
+        Long cores use an index prefix plus a fulltext lookup. Short cores
         keep selective prefix-bound patterns. Final accuracy is always
         ``identity_core_appears`` in Python.
         """
         if not hints:
             return []
 
-        # sdo_id -> {"containment": {core: pattern}, "bound": {core: patterns}}
+        # sdo_id -> {"containment": {core: pattern}, "bound": {}, "prefixes": set}
         grouped = {}
 
         for sdo_id, sdo_prefix, core_token in hints:
@@ -221,8 +230,9 @@ class StandardsRepository:
 
             bucket = grouped.setdefault(
                 int(sdo_id),
-                {"containment": {}, "bound": {}},
+                {"containment": {}, "bound": {}, "prefixes": set()},
             )
+            bucket["prefixes"].add(sdo_prefix)
 
             if containment:
                 bucket["containment"][core] = containment
@@ -234,59 +244,42 @@ class StandardsRepository:
 
         results = []
         seen = set()
-        # Containment uses 3 predicates per core; large batches are fine.
-        containment_chunk = 40
         bound_chunk = 5
 
         for sdo_id, bucket in grouped.items():
-            containment_items = list(bucket["containment"].items())
-            for start in range(0, len(containment_items), containment_chunk):
-                batch = containment_items[start:start + containment_chunk]
-                filters = []
-                cores_in_batch = []
-
-                for core, pattern in batch:
-                    cores_in_batch.append(core)
-                    contain = f"%{pattern}%"
-                    filters.append(Standard.display_stdNo.like(contain))
-                    filters.append(Standard.standardno.like(contain))
-                    filters.append(
-                        Standard.stdNo_normalized.like(f"%{core}%")
-                    )
-
-                if not filters:
+            cores_in_batch = list(bucket["containment"])
+            rows = fetch_long_core_candidates(
+                self.db,
+                model=Standard,
+                sdo_id=sdo_id,
+                cores=cores_in_batch,
+                sdo_prefixes=bucket["prefixes"],
+                text_columns=(
+                    Standard.display_stdNo,
+                    Standard.standardno,
+                ),
+                fulltext_column=Standard.display_stdNo,
+                normalized_column=Standard.stdNo_normalized,
+            )
+            for row in rows:
+                if row.id in seen:
                     continue
 
-                rows = run_with_retry(
-                    self.db,
-                    lambda sdo_id=sdo_id, filters=filters: (
-                        self.db.query(Standard)
-                        .filter(
-                            Standard.sdo_id == sdo_id,
-                            or_(*filters),
-                        )
-                    ),
-                )
+                display_value = str(row.display_stdNo or "").strip()
+                standard_value = str(row.standardno or "").strip()
+                normalized_value = str(
+                    row.stdNo_normalized or ""
+                ).strip()
+                if not any(
+                    identity_core_appears(display_value, core)
+                    or identity_core_appears(standard_value, core)
+                    or identity_core_appears(normalized_value, core)
+                    for core in cores_in_batch
+                ):
+                    continue
 
-                for row in rows:
-                    if row.id in seen:
-                        continue
-
-                    display_value = str(row.display_stdNo or "").strip()
-                    standard_value = str(row.standardno or "").strip()
-                    normalized_value = str(
-                        row.stdNo_normalized or ""
-                    ).strip()
-                    if not any(
-                        identity_core_appears(display_value, core)
-                        or identity_core_appears(standard_value, core)
-                        or identity_core_appears(normalized_value, core)
-                        for core in cores_in_batch
-                    ):
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                seen.add(row.id)
+                results.append(row)
 
             bound_items = list(bucket["bound"].items())
             for start in range(0, len(bound_items), bound_chunk):
@@ -450,22 +443,44 @@ class StandardsRepository:
         if not requested:
             return []
 
-        # Use retry handling here as well so an expired/
-        # disconnected MySQL connection can recover.
-        rows = run_with_retry(
-            self.db,
-            lambda:
-                self.db.query(
+        # SDO names and aliases change infrequently. Reuse the small active
+        # SDO table snapshot briefly so repeated one-row searches do not pay
+        # for a database round trip each time.
+        get_bind = getattr(self.db, "get_bind", None)
+        bind = get_bind() if callable(get_bind) else None
+        rows = None
+        if bind is not None:
+            now = time.monotonic()
+            with _sdo_rows_cache_lock:
+                cached = _sdo_rows_cache.get(bind)
+                if cached and now - cached[0] < _SDO_ROWS_CACHE_TTL_SECONDS:
+                    rows = cached[1]
+                else:
+                    rows = run_with_retry(
+                        self.db,
+                        lambda: self.db.query(
+                            SDO.id,
+                            SDO.sdo_title,
+                            SDO.sdo_fullname,
+                            SDO.sdo_shortdesc,
+                            SDO.designation,
+                        ).filter(SDO.status == 1),
+                    )
+                    _sdo_rows_cache[bind] = (now, rows)
+
+        if rows is None:
+            # Lightweight test doubles and nonstandard sessions without a
+            # stable bind keep the uncached query behavior.
+            rows = run_with_retry(
+                self.db,
+                lambda: self.db.query(
                     SDO.id,
                     SDO.sdo_title,
                     SDO.sdo_fullname,
                     SDO.sdo_shortdesc,
                     SDO.designation,
-                )
-                .filter(
-                    SDO.status == 1
-                ),
-        )
+                ).filter(SDO.status == 1),
+            )
 
         matches = []
 
