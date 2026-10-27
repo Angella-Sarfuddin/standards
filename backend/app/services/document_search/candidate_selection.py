@@ -391,6 +391,10 @@ def _select_master_candidate(
             row,
         )
 
+    candidates = service_class._prefer_externally_available_candidates(
+        candidates
+    )
+
     requested_prefix = service_class._normalized_identifier_prefix(
         (row.get("identity") or {}).get("identifier_prefix") or ""
     )

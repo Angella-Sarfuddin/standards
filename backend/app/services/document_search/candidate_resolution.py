@@ -201,6 +201,10 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         if active_candidates:
             validated = active_candidates
 
+    validated = service_class._prefer_externally_available_candidates(
+        validated
+    )
+
     requested_prefix = service_class._normalized_identifier_prefix(
         row["identity"].get("identifier_prefix") or ""
     )

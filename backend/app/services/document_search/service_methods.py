@@ -1059,9 +1059,33 @@ class DocumentSearchServiceMethods:
         return value or None
 
     @staticmethod
+    def _is_bsb_internal_only(standard):
+        """True when the row is stocked only for BSB Internal use."""
+        if int(getattr(standard, "BSBInternal", 0) or 0) != 1:
+            return False
+        return not any(
+            int(getattr(standard, flag, 0) or 0) == 1
+            for flag in (
+                "BSBESales",
+                "BSBSubscription",
+                "DocumentAvailability",
+            )
+        )
+
+    @staticmethod
+    def _prefer_externally_available_candidates(candidates):
+        """Keep a sellable row ahead of a BSB Internal-only duplicate."""
+        candidates = list(candidates or [])
+        sellable = [
+            candidate
+            for candidate in candidates
+            if not DocumentSearchService._is_bsb_internal_only(candidate)
+        ]
+        return sellable or candidates
+
+    @staticmethod
     def _master_result_status(status_info, standard):
         """A current catalogue row is found. Withdrawn and historical are not."""
-        del standard
         if not status_info:
             return "STATUS UNKNOWN", False
 
@@ -1074,6 +1098,8 @@ class DocumentSearchServiceMethods:
             or DocumentSearchService._status_label_is_unavailable(status_name)
         ):
             return status_name.upper(), False
+        if DocumentSearchService._is_bsb_internal_only(standard):
+            return "NOT FOUND", False
         return "AVAILABLE", True
 
     @staticmethod

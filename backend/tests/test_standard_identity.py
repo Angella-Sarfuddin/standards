@@ -504,6 +504,66 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertEqual(identity["core_number"], "2099")
         self.assertEqual(identity["year"], 1986)
 
+    def test_bsb_internal_only_master_is_not_found(self):
+        active = {"name": "ACTIVE", "cart_show": 1, "std_show": 1}
+        self.assertEqual(
+            DocumentSearchService._master_result_status(
+                active,
+                SimpleNamespace(
+                    BSBInternal=1,
+                    BSBESales=0,
+                    BSBSubscription=0,
+                    DocumentAvailability=0,
+                ),
+            ),
+            ("NOT FOUND", False),
+        )
+        for flag in ("BSBESales", "BSBSubscription", "DocumentAvailability"):
+            row = SimpleNamespace(
+                BSBInternal=1,
+                BSBESales=0,
+                BSBSubscription=0,
+                DocumentAvailability=0,
+            )
+            setattr(row, flag, 1)
+            self.assertEqual(
+                DocumentSearchService._master_result_status(active, row),
+                ("AVAILABLE", True),
+            )
+
+    def test_master_selection_skips_bsb_internal_only_row(self):
+        row = {
+            "sdo_name": "ISO",
+            "identity": parse_identity("ISO", "ISO 9001"),
+        }
+        internal = SimpleNamespace(
+            id=1,
+            standardno="ISO 9001",
+            display_stdNo="ISO 9001:2015",
+            standardyear=2015,
+            recent=1,
+            BSBInternal=1,
+            BSBESales=0,
+            BSBSubscription=0,
+            DocumentAvailability=0,
+        )
+        available = SimpleNamespace(
+            id=2,
+            standardno="ISO 9001",
+            display_stdNo="ISO 9001:2015",
+            standardyear=2015,
+            recent=0,
+            BSBInternal=1,
+            BSBESales=1,
+            BSBSubscription=0,
+            DocumentAvailability=1,
+        )
+        selected = DocumentSearchService._select_master_candidate(
+            [internal, available],
+            row,
+        )
+        self.assertIs(selected, available)
+
     def test_active_master_status_remains_available(self):
         self.assertEqual(
             DocumentSearchService._master_result_status(
