@@ -102,9 +102,9 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(results), 1)
-        self.assertTrue(results[0]["matched"])
+        self.assertFalse(results[0]["matched"])
         self.assertEqual(results[0]["status"], "WITHDRAWN")
-        self.assertIsNotNone(results[0]["standard"])
+        self.assertIsNone(results[0]["standard"])
 
 
 if __name__ == "__main__":

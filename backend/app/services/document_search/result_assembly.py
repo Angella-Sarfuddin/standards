@@ -328,9 +328,10 @@ def assemble_results(
                     status_info = status_map.get(
                         getattr(standard, "status_id", None)
                     )
-                    is_match = True
+                    is_match = status == "AVAILABLE"
                     if not status_info:
                         status = "STATUS UNKNOWN"
+                        is_match = False
                     elif (
                             int(status_info.get("cart_show") or 0) != 1
                             or int(status_info.get("std_show") or 0) != 1
@@ -341,6 +342,7 @@ def assemble_results(
                         status = str(
                             status_info.get("name") or "UNAVAILABLE"
                         ).upper()
+                        is_match = False
                     actual_year = service._candidate_year(
                         standard,
                         row["sdo_name"],
@@ -377,12 +379,14 @@ def assemble_results(
                         row,
                         actual_year,
                     )
+                    is_match = False
                 embedded_lifecycle_status = (
                     service._candidate_embedded_lifecycle_status(standard)
                 )
                 if embedded_lifecycle_status:
                     status = embedded_lifecycle_status
                     data["catalog_status"] = embedded_lifecycle_status
+                    is_match = False
                 if service._is_api_request(row):
                     api_status_info = status_map.get(
                         getattr(standard, "status_id", None)
@@ -399,6 +403,7 @@ def assemble_results(
                             )
                             else api_lifecycle.upper()
                         )
+                        is_match = False
 
                 # The BIS catalogue sometimes stores BIS-prefixed display
                 # numbers for standards requested under the IS designation.

@@ -260,7 +260,12 @@ def _candidate_year(candidate, sdo_name):
     )
 
 def _normalized_identifier_prefix(value):
-    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    key = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    # IS/IEC and IS/IEC/IEEE are the same adoption. The joint IEEE
+    # marker must not make the older IS/IEC edition outrank the current one.
+    if key.startswith("ISIEC"):
+        key = re.sub(r"IEEE$", "", key)
+    return key
 
 def _candidate_matches_identity(
     candidate,

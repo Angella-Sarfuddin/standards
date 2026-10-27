@@ -355,8 +355,8 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
                 ("ISO", "ISO 9001 : 2022", True, "AVAILABLE"),
                 ("ISO", "ISO 9001 : 2022", True, "AVAILABLE"),
                 ("ISO", "ISO 14001 : 2022", True, "AVAILABLE"),
-                ("API", "API 570 : 2019", True, "WITHDRAWN"),
-                ("BIS", "IS 2099 : 1986", True, "WITHDRAWN"),
+                ("API", "API 570 : 2019", False, "WITHDRAWN"),
+                ("BIS", "IS 2099 : 1986", False, "WITHDRAWN"),
                 ("IEC", "IEC 777", False, "NOT FOUND"),
                 ("UNKNOWN", "UNKNOWN 9", False, "SDO NOT FOUND"),
                 ("ISO", "ISO 3000 SERIES", True, "AVAILABLE"),
@@ -409,8 +409,8 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             results[2]["status_detail"],
             "Requested year 2020; returned latest available edition 2022.",
         )
-        self.assertEqual(results[3]["standard"]["Standard_id"], "API-570-2019")
-        self.assertEqual(results[4]["standard"]["Standard_id"], "BIS-2099-1986")
+        self.assertIsNone(results[3]["standard"])
+        self.assertIsNone(results[4]["standard"])
         self.assertEqual(results[4]["replacement_standard"], "IS/IEC 60137 : 2017")
         self.assertEqual(results[5]["standard"], None)
         self.assertEqual(results[6], {

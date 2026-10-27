@@ -1060,20 +1060,20 @@ class DocumentSearchServiceMethods:
 
     @staticmethod
     def _master_result_status(status_info, standard):
-        """The catalogue row is found. Lifecycle is reported separately."""
+        """A current catalogue row is found. Withdrawn and historical are not."""
         del standard
         if not status_info:
-            return "STATUS UNKNOWN", True
+            return "STATUS UNKNOWN", False
 
         status_name = str(status_info.get("name") or "").strip()
         if not status_name:
-            return "STATUS UNKNOWN", True
+            return "STATUS UNKNOWN", False
         if (
             int(status_info.get("cart_show") or 0) != 1
             or int(status_info.get("std_show") or 0) != 1
             or DocumentSearchService._status_label_is_unavailable(status_name)
         ):
-            return status_name.upper(), True
+            return status_name.upper(), False
         return "AVAILABLE", True
 
     @staticmethod

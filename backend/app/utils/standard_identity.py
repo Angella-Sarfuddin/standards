@@ -161,9 +161,13 @@ SDO_IDENTIFIER_PREFIX_ALIASES = {
         "IEC",
     ),
     "BIS": (
+        "BIS IS/IEC/IEEE",
+        "BIS IS IEC IEEE",
         "BIS IS/IEC",
         "BIS IS IEC",
         "BIS IEC",
+        "IS/IEC/IEEE",
+        "IS IEC IEEE",
         "IS/IEC",
         "IS IEC",
         "IS",
@@ -474,6 +478,22 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         patterns.append(f"{glued}{compact}%")
     if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
         patterns.append(f"{compact}%")
+    # "60079 30-1" is stored as "60079 : Part 30 : Sec 1" or "60079-30-1".
+    # The compact core 60079PART30 does not occur as a left prefix of either.
+    part_and_section = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", compact)
+    if part_and_section:
+        root = part_and_section.group("root")
+        part = str(int(part_and_section.group("part")))
+        for spelling in {prefix, "IS/IEC", "IS/IEC/IEEE", "IEC/IEEE"}:
+            if not spelling:
+                continue
+            patterns.extend([
+                f"{spelling} {root} : Part {part}%",
+                f"{spelling} {root} : PART {part}%",
+                f"{spelling} {root} PART {part}%",
+                f"{spelling} {root}-{part}-%",
+                f"{spelling} {root} {part}-%",
+            ])
     return [
         pattern
         for pattern in dict.fromkeys(patterns)
@@ -1170,12 +1190,13 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         r"\1 \2",
         core,
     )
-    # BIS legacy IEC codes may flatten Part-Section into a numeric suffix:
-    # 60079 29-2 means Part 29, Section 2; 60947 02-May maps to Part 5,
-    # Section 2 after the Excel-date conversion above.
+    # A trailing part-section is the standard, then the part, then the
+    # section: "60079 30-1" and the catalogue form "60079-30-1" are both
+    # standard 60079, part 30, section 1. A four-digit year such as
+    # 26-2006 is not a section. Excel month labels are removed earlier.
     if sdo in {"IS", "BIS"}:
         implicit_section = re.fullmatch(
-            r"(?P<root>\d{4,})\s+(?P<part>\d{1,2})-(?P<section>\d)",
+            r"(?P<root>\d{4,})(?:\s+|-)(?P<part>\d{1,2})-(?P<section>\d{1,2})",
             core,
         )
         if implicit_section:
@@ -1463,6 +1484,24 @@ def _cores_compatible(requested, candidate, requested_core, candidate_core) -> b
         and candidate_core[len(requested_core):].isdigit()
         and candidate_core[len(requested_core):] != requested_part.group(1)
     ):
+        return False
+
+    requested_part_number = re.fullmatch(
+        r"(?P<base>.+PART)(?P<part>\d+)",
+        requested_core,
+    )
+    candidate_part_number = re.fullmatch(
+        r"(?P<base>.+PART)(?P<part>\d+)",
+        candidate_core,
+    )
+    if (
+        requested_part_number
+        and candidate_part_number
+        and requested_part_number.group("base") == candidate_part_number.group("base")
+        and requested_part_number.group("part") != candidate_part_number.group("part")
+    ):
+        # Part 3 is not part 30. The digit-extension rule below must not
+        # treat the shorter part number as a prefix.
         return False
 
     if (
