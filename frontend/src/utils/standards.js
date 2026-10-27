@@ -31,12 +31,47 @@ export const getClassifications = (result) => {
   return Array.isArray(classifications) ? classifications : [];
 };
 
+const tcCodeLabel = (code) => {
+  const text = String(code || "").trim();
+  if (!text) {
+    return "";
+  }
+  const simple = text.match(/^(?:TC\s*[- ]?\s*)?(\d+[A-Z]?)$/i);
+  if (simple) {
+    return `TC ${simple[1].toUpperCase()}`;
+  }
+  const hierarchy = text.replace(/\s+/g, "").match(/^(\d+)(?:\/\d+)+$/);
+  if (hierarchy) {
+    return `TC ${hierarchy[1]}`;
+  }
+  if (/\bTC\s*[- ]?\s*\d/i.test(text)) {
+    return text.replace(/\s+/g, " ").replace(/\.+$/, "");
+  }
+  return "";
+};
+
+const textHasCommitteeCode = (text) =>
+  /\b(?:ISO\s*\/\s*)?TC\s*[- ]?\s*\d|\b(?:SC|WG|JWG|PGD|GMB|GBM|MHD|ETD|CED)\s*[- ]?\s*\d/i.test(
+    String(text || "")
+  );
+
+const tcCellText = (code, description) => {
+  const name = String(description || "").trim();
+  const rawCode = String(code || "").trim();
+  const label = tcCodeLabel(rawCode);
+  if (name && label) {
+    if (textHasCommitteeCode(name)) {
+      return name;
+    }
+    return `${name} (${label})`;
+  }
+  return name || label || rawCode;
+};
+
 export const formatTechnicalCommittee = (result) => {
   const labels = [];
   getClassifications(result).forEach((item) => {
-    const description = String(item?.description || "").trim();
-    const code = String(item?.code || "").trim();
-    const label = description || code;
+    const label = tcCellText(item?.code, item?.description);
     if (label && !labels.includes(label)) {
       labels.push(label);
     }

@@ -174,7 +174,7 @@ class ExportService:
                 if not code and not description or key in seen_classifications:
                     continue
                 seen_classifications.add(key)
-                tc_text = description or code
+                tc_text = ExportService._tc_cell_text(code, description)
                 if tc_text and tc_text not in tc_descriptions:
                     tc_descriptions.append(tc_text)
 
@@ -375,6 +375,50 @@ class ExportService:
             "",
             text,
         ).rstrip(" :/+")
+
+    @staticmethod
+    def _tc_code_label(code):
+        """Turn a catalogue committee id into a label such as TC 65."""
+        text = str(code or "").strip()
+        if not text:
+            return ""
+        simple = re.fullmatch(
+            r"(?i)(?:TC\s*[- ]?\s*)?(\d+[A-Z]?)",
+            text,
+        )
+        if simple:
+            return f"TC {simple.group(1).upper()}"
+        hierarchy = re.fullmatch(
+            r"(\d+)(?:/\d+)+",
+            re.sub(r"\s+", "", text),
+        )
+        if hierarchy:
+            return f"TC {hierarchy.group(1)}"
+        if re.search(r"(?i)\bTC\s*[- ]?\s*\d", text):
+            return re.sub(r"\s+", " ", text).strip().rstrip(".")
+        return ""
+
+    @staticmethod
+    def _text_has_committee_code(text):
+        return bool(
+            re.search(
+                r"(?i)\b(?:ISO\s*/\s*)?TC\s*[- ]?\s*\d|"
+                r"\b(?:SC|WG|JWG|PGD|GMB|GBM|MHD|ETD|CED)\s*[- ]?\s*\d",
+                str(text or ""),
+            )
+        )
+
+    @staticmethod
+    def _tc_cell_text(code, description):
+        """Show the committee name with its code, e.g. Name (TC 65)."""
+        description = str(description or "").strip()
+        code = str(code or "").strip()
+        label = ExportService._tc_code_label(code)
+        if description and label:
+            if ExportService._text_has_committee_code(description):
+                return description
+            return f"{description} ({label})"
+        return description or label or code or None
 
     @staticmethod
     def _classification_label(code, description, owner_sdo=None):

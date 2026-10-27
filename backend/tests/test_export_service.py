@@ -175,6 +175,50 @@ class ExportServiceTests(unittest.TestCase):
         )
         workbook.close()
 
+    def test_tc_column_appends_code_to_plain_description(self):
+        output = ExportService.export_results(
+            {
+                "results": [
+                    {
+                        "requested_sdo": "IEC",
+                        "requested_standard": "IEC 61131",
+                        "matched": True,
+                        "standard": {
+                            "standardno": "IEC 61131",
+                            "enrichment": {
+                                "classifications": [
+                                    {
+                                        "code": "65",
+                                        "description": (
+                                            "Industrial-process measurement, "
+                                            "control and automation"
+                                        ),
+                                    }
+                                ]
+                            },
+                        },
+                    }
+                ],
+                "grouping": {},
+            }
+        )
+
+        workbook = load_workbook(output)
+        worksheet = workbook["Quotation"]
+        headers = [cell.value for cell in worksheet[1]]
+        self.assertEqual(
+            worksheet.cell(2, headers.index("TC") + 1).value,
+            "Industrial-process measurement, control and automation (TC 65)",
+        )
+        workbook.close()
+        self.assertEqual(
+            ExportService._tc_cell_text(
+                "TC-65",
+                "Industrial-process measurement, control and automation",
+            ),
+            "Industrial-process measurement, control and automation (TC 65)",
+        )
+
     def test_numeric_tc_codes_get_tc_prefix(self):
         self.assertEqual(ExportService._classification_label("8", ""), "TC 8")
         self.assertEqual(ExportService._classification_label("16", ""), "TC 16")
