@@ -1,14 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -37,31 +30,28 @@ export default function PreviewTable({
 
   return (
     <Card className="border border-border/70 shadow-sm ring-0">
-      <CardHeader className="gap-x-4 px-4 pt-5 sm:px-6 sm:pt-6">
-        <div className="text-xs font-semibold tracking-[0.14em] text-muted-foreground">
-          VERIFICATION READY
-        </div>
-        <CardTitle className="text-xl font-semibold tracking-tight sm:text-2xl">
-          {previewRows.length} standards detected
-        </CardTitle>
-        <CardDescription className="leading-6">
-          Review the extracted standards before running the database search.
-        </CardDescription>
-        <CardAction className="col-span-2 row-start-4 justify-self-stretch pt-2 sm:col-span-1 sm:row-span-2 sm:row-start-1 sm:justify-self-end sm:pt-0">
-          <Button
-            type="button"
-            onClick={onVerify}
-            className="h-10 w-full rounded-xl sm:w-auto"
-            disabled={isSearchingDocuments}
-          >
-            {isSearchingDocuments ? <Spinner /> : null}
-            {isSearchingDocuments ? "Verifying..." : "Verify & Search"}
-            {isSearchingDocuments ? null : <ArrowRight />}
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="flex min-w-0 flex-col gap-4 px-4 pb-5 sm:px-6 sm:pb-6">
-        <div className="min-w-0 rounded-xl border border-border/70 bg-background">
+      <CardContent className="flex min-w-0 flex-col gap-4 px-4 py-5 sm:px-6 sm:py-6">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-background">
+          <div className="flex items-center justify-between gap-3 border-b bg-muted px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="shrink-0 text-[11px] font-semibold tracking-[0.14em] text-muted-foreground">
+                VERIFICATION READY
+              </span>
+              <span className="truncate text-sm font-semibold tracking-tight">
+                {previewRows.length} standards detected
+              </span>
+            </div>
+            <Button
+              type="button"
+              onClick={onVerify}
+              className="h-8 shrink-0 rounded-lg"
+              disabled={isSearchingDocuments}
+            >
+              {isSearchingDocuments ? <Spinner /> : null}
+              {isSearchingDocuments ? "Verifying..." : "Verify & Search"}
+              {isSearchingDocuments ? null : <ArrowRight />}
+            </Button>
+          </div>
           <Table
             containerClassName="max-h-[min(28rem,58vh)]"
             className="min-w-[620px] table-fixed"

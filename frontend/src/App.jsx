@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -77,17 +77,17 @@ function App() {
   }, [isDark]);
 
   const sparklePositions = [
-    [6, 18, "#9b7cff", 13],
-    [15, 72, "#49b9ff", 11],
-    [24, 34, "#52d6a7", 15],
-    [33, 88, "#ffb852", 10],
-    [43, 14, "#f07caa", 12],
-    [52, 61, "#a58aff", 17],
-    [61, 27, "#4db8ff", 10],
-    [70, 81, "#4ed5a3", 13],
-    [79, 43, "#ffbd5b", 11],
-    [89, 12, "#ec7fb2", 15],
-    [95, 68, "#9d83ff", 12],
+    [6, 18, "#e10600", 13],
+    [15, 72, "#111111", 11],
+    [24, 34, "#e10600", 15],
+    [33, 88, "#5c5c5c", 10],
+    [43, 14, "#111111", 12],
+    [52, 61, "#e10600", 17],
+    [61, 27, "#5c5c5c", 10],
+    [70, 81, "#111111", 13],
+    [79, 43, "#e10600", 11],
+    [89, 12, "#5c5c5c", 15],
+    [95, 68, "#111111", 12],
   ];
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
@@ -155,28 +155,67 @@ function App() {
     clearFileInput();
   };
 
-  const handleSearch = async (submittedQuery) => {
-    const query = String(submittedQuery ?? searchQuery).trim();
+  const searchRequestId = useRef(0);
+  const searchTimer = useRef(null);
 
-    if (!query) {
-      return;
-    }
-
-    setSearchQuery(query);
+  const runSearch = async (query) => {
+    const requestId = searchRequestId.current + 1;
+    searchRequestId.current = requestId;
     setIsQuickSearching(true);
     setError("");
     setSearchResult(null);
 
     try {
       const response = await searchStandards(query);
+      if (requestId !== searchRequestId.current) {
+        return;
+      }
       setSearchResult(Array.isArray(response) ? response : []);
     } catch (err) {
+      if (requestId !== searchRequestId.current) {
+        return;
+      }
       console.error(err);
       setError(getApiErrorMessage(err, "Unable to search the standard."));
     } finally {
-      setIsQuickSearching(false);
+      if (requestId === searchRequestId.current) {
+        setIsQuickSearching(false);
+      }
     }
   };
+
+  const handleSearchQueryChange = (value) => {
+    setSearchQuery(value);
+    clearTimeout(searchTimer.current);
+
+    const query = value.trim();
+    if (!query) {
+      searchRequestId.current += 1;
+      setSearchResult(null);
+      setIsQuickSearching(false);
+      return;
+    }
+
+    setSearchResult(null);
+    searchTimer.current = setTimeout(() => {
+      runSearch(query);
+    }, 400);
+  };
+
+  const handleSearch = (submittedQuery) => {
+    const query = String(submittedQuery ?? searchQuery).trim();
+    if (!query) {
+      return;
+    }
+
+    clearTimeout(searchTimer.current);
+    setSearchQuery(query);
+    runSearch(query);
+  };
+
+  useEffect(() => {
+    return () => clearTimeout(searchTimer.current);
+  }, []);
 
   const handleFileChange = async (eventOrFile) => {
     const file = eventOrFile?.target?.files
@@ -574,7 +613,7 @@ function App() {
         isDark={isDark}
         onToggleTheme={() => setIsDark((current) => !current)}
         searchQuery={searchQuery}
-        onSearchQueryChange={setSearchQuery}
+        onSearchQueryChange={handleSearchQueryChange}
         onSearch={handleSearch}
         searchResult={searchResult}
         isQuickSearching={isQuickSearching}

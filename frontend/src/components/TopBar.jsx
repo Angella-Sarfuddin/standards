@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Moon, Search, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -32,6 +32,16 @@ export default function TopBar({
 }) {
   const [resultsOpen, setResultsOpen] = useState(false);
 
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setResultsOpen(false);
+      return;
+    }
+    if (searchResult) {
+      setResultsOpen(true);
+    }
+  }, [searchQuery, searchResult]);
+
   const submitSearch = (event) => {
     event.preventDefault();
     const text = searchQuery.trim();
@@ -59,7 +69,7 @@ export default function TopBar({
             className="flex items-center gap-2"
             onSubmit={submitSearch}
           >
-            <div className="flex h-12 min-w-0 flex-1 items-center rounded-full border border-[#e10600]/70 bg-background pr-1 pl-4 shadow-sm">
+            <div className="flex h-12 min-w-0 flex-1 items-center rounded-full border border-primary/70 bg-background pr-1 pl-4 shadow-sm transition-colors hover:border-primary">
               <input
                 className="h-full min-w-0 flex-1 bg-transparent pr-2 text-sm outline-none placeholder:text-muted-foreground"
                 value={searchQuery}
@@ -74,12 +84,12 @@ export default function TopBar({
               />
               <button
                 type="submit"
-                className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#d0121a] text-white transition-colors hover:bg-[#b40f16] disabled:opacity-60"
+                className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:bg-[#b50500] disabled:opacity-60"
                 disabled={isQuickSearching || !searchQuery.trim()}
                 aria-label={isQuickSearching ? "Searching" : "Search"}
               >
                 {isQuickSearching ? (
-                  <Spinner className="size-4 text-white" />
+                  <Spinner className="size-4 text-primary-foreground" />
                 ) : (
                   <Search className="size-4" />
                 )}
@@ -103,7 +113,7 @@ export default function TopBar({
               {searchResult.length ? (
                 searchResult.map((result, index) => (
                   <div
-                    className="rounded-xl px-3 py-2.5 text-sm hover:bg-muted/60"
+                    className="rounded-xl px-3 py-2.5 text-sm transition-colors hover:bg-primary/10 hover:text-primary"
                     key={
                       result?.standard?.id ||
                       result?.standard?.Standard_id ||
