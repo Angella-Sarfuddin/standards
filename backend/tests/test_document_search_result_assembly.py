@@ -115,7 +115,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         service._select_candidates = lambda candidates, row: trace.append(("select_family", row["request_key"], tuple(candidate.id for candidate in candidates))) or list(candidates)
         service._select_latest_tema_edition = lambda candidates, row, _status: trace.append(("select_tema", row["request_key"], tuple(candidate.id for candidate in candidates))) or list(candidates)
         service._candidate_year = lambda candidate, _sdo: {71: 2023, 77: 2023, 81: 2000, 88: 2016, 99: 2026, 100: 2020}[candidate.id]
-        service.build_enrichment_map = lambda standards: {
+        service.build_enrichment_map = lambda standards, _adoption_text=None: {
             standard.Standard_id: {
                 "price": standard.id,
                 "currency": "USD",
@@ -236,7 +236,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         service.enrichment_repository = StatusRepository()
         service.resolve_sdo_ids = lambda names, fallback_names=None: {"ISO": 1, "API": 2, "BIS": 3, "IEC": 4, "UNKNOWN": None}
         service.find_master_matches = lambda unresolved: trace.append(("master_fallback", tuple(row["request_key"] for row in unresolved))) or master_matches
-        service.build_enrichment_map = lambda standards: {
+        service.build_enrichment_map = lambda standards, _adoption_text=None: {
             (standard.Standard_id): {
                 "price": 100 + standard.id,
                 "currency": "USD",
@@ -289,7 +289,7 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
         }
 
         enrichment_calls = []
-        def build_enrichment(standards):
+        def build_enrichment(standards, _adoption_text=None):
             enrichment_calls.append(tuple(standard.id for standard in standards))
             trace.append(("enrichment", tuple(standard.id for standard in standards)))
             return {

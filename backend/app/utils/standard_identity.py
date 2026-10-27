@@ -1419,30 +1419,82 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     }
 
 
-def extract_international_references(display_number: str) -> List[Dict]:
-    """Extract explicit ISO/IEC/IEEE edition references from a designation.
+_ADOPTION_QUALIFIER_WORDS = {
+    "PART",
+    "PT",
+    "SEC",
+    "SECTION",
+    "AMD",
+    "AMENDMENT",
+    "REV",
+    "REVISION",
+    "COR",
+    "CORRIGENDUM",
+    "MOD",
+    "IDT",
+    "EQV",
+    "NEQ",
+}
+_PUBLISHER_TOKEN = r"[A-Z][A-Z0-9]{1,}(?:\s*/\s*[A-Z][A-Z0-9]{1,})*"
+_ADOPTION_REFERENCE_RE = re.compile(
+    rf"(?i)(?<![A-Z0-9])(?P<sdo>{_PUBLISHER_TOKEN})\s+"
+    r"(?P<number>[A-Z0-9][A-Z0-9./-]*\d[A-Z0-9./-]*)"
+    r"(?:\s*[: ]\s*(?:PART|PT)\s*\d+"
+    r"(?:\s*[: ]\s*(?:SEC(?:TION)?)\s*\d+)?)?"
+    r"\s*:\s*(?P<year>(?:19|20)\d{2})\b"
+)
+_JOINT_ADOPTION_RE = re.compile(
+    r"(?i)\b(?:IS|BIS)\s*/\s*(?!PART\b|PT\b|SEC\b|SECTION\b)[A-Z]{2,}"
+    r"|\b(?:IS|BIS)\s+(?!PART\b|PT\b|SEC\b|SECTION\b|AMD\b|REV\b)"
+    r"[A-Z]{2,}\b"
+)
 
-    BIS catalogue designations commonly append the adopted international
-    edition in parentheses, for example ``(IEC 60076-10 : 2016)``. Keep this
-    deliberately strict: a publisher token, designation and year must all be
-    present, so an IS number or an unversioned mention cannot trigger a price
-    lookup.
+
+def _reference_is_inside_parentheses(value: str, start: int) -> bool:
+    return value.rfind("(", 0, start) > value.rfind(")", 0, start)
+
+
+def _referenced_publishers(publisher: str, *, inside_parentheses: bool) -> List[str]:
+    tokens = [
+        token
+        for token in re.split(r"\s*/\s*", re.sub(r"\s+", "", publisher).upper())
+        if token and token not in _ADOPTION_QUALIFIER_WORDS
+    ]
+    if not tokens:
+        return []
+    if all(token in {"IS", "BIS"} for token in tokens):
+        return tokens if inside_parentheses else []
+    return [token for token in tokens if token not in {"IS", "BIS"}]
+
+
+def extract_international_references(display_number: str) -> List[Dict]:
+    """Extract an adopted edition named by a BIS designation.
+
+    The adopted publisher can be any catalogue publisher, as in
+    ``IS 12065 : 2025(IEC 60034-9 : 2021, MOD)``. A publisher, number, and
+    year must all be present. The outer IS number itself is not a reference.
     """
     value = clean(display_number)
-    pattern = re.compile(
-        r"(?i)\b(?P<sdo>ISO\s*/\s*IEC|ISO|IEC|IEEE)\s+"
-        r"(?P<number>[A-Z0-9][A-Z0-9./-]*(?:\s+(?:PART|PT)\s*\d+(?:\s*[-:]\s*\d+)?)?)"
-        r"\s*:\s*(?P<year>(?:19|20)\d{2})\b"
-    )
     references = []
     seen = set()
-    for match in pattern.finditer(value):
-        publisher = re.sub(r"\s+", "", match.group("sdo")).upper()
+    for match in _ADOPTION_REFERENCE_RE.finditer(value):
+        publishers = _referenced_publishers(
+            match.group("sdo"),
+            inside_parentheses=_reference_is_inside_parentheses(
+                value,
+                match.start(),
+            ),
+        )
         number = match.group("number").strip()
+        part = match.group(0)[match.end("number"):match.start("year")]
+        part = re.sub(r"\s*:\s*$", "", part).strip(" :")
         year = int(match.group("year"))
-        sdo_names = ("ISO", "IEC") if publisher == "ISO/IEC" else (publisher,)
-        for sdo_name in sdo_names:
-            designation = f"{sdo_name} {number} : {year}"
+        for sdo_name in publishers:
+            designation = " ".join(
+                piece
+                for piece in (f"{sdo_name} {number}", part, f": {year}")
+                if piece
+            )
             identity = parse_identity(sdo_name, designation)
             key = (
                 sdo_name,
@@ -1461,6 +1513,16 @@ def extract_international_references(display_number: str) -> List[Dict]:
                 }
             )
     return references
+
+
+def bis_names_another_standard(*values: str) -> bool:
+    """A BIS adoption names another standard; a plain IS number does not."""
+    text = " ".join(str(value or "") for value in values)
+    if not text.strip():
+        return False
+    if extract_international_references(text):
+        return True
+    return bool(_JOINT_ADOPTION_RE.search(text))
 
 
 def _full_variants(sdo: str, body: str) -> List[str]:

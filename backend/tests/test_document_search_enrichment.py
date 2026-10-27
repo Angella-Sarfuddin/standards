@@ -64,7 +64,11 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
                 self.alias_lookup_calls.append(("API", list(master_ids)))
                 return []
 
-            def get_international_equivalent_price_aliases(self, master_ids):
+            def get_international_equivalent_price_aliases(
+                self,
+                master_ids,
+                extra_designations=None,
+            ):
                 self.alias_lookup_calls.append(("international", list(master_ids)))
                 return []
 
@@ -336,6 +340,114 @@ class DocumentSearchEnrichmentTests(unittest.TestCase):
 
         self.assertIsNone(result[101]["price"])
         self.assertTrue(result[101]["has_database_price"])
+
+    def test_bis_adoption_uses_the_named_standard_price(self):
+        bis = SimpleNamespace(
+            Standard_id="BIS-12065",
+            sdo_id=21,
+            standardno="IS 12065",
+        )
+        bis_master = SimpleNamespace(
+            id=1,
+            Standard_id="BIS-12065",
+            sdo_id=21,
+            standardno="IS 12065",
+            display_stdNo="IS 12065 : 2025",
+            standardyear=2025,
+            DocumentAvailability=1,
+        )
+        adopted = SimpleNamespace(
+            id=2,
+            Standard_id="IEC-60034-9",
+            sdo_id=16,
+            standardno="IEC 60034-9",
+            display_stdNo="IEC 60034-9 : 2021",
+            standardyear=2021,
+            DocumentAvailability=0,
+        )
+        commented = SimpleNamespace(
+            id=4,
+            Standard_id="IEC-60034-9-CMV",
+            sdo_id=16,
+            standardno="IEC 60034-9",
+            display_stdNo="IEC 60034-9 : 2021 CMV",
+            standardyear=2021,
+            DocumentAvailability=1,
+        )
+        service, repository = self._make_service(
+            [bis],
+            [bis_master],
+            currencies={
+                21: {"code": "INR", "symbol": "₹"},
+                16: {"code": "CHF", "symbol": "CHF"},
+            },
+            sdo_titles={21: "BIS", 16: "IEC"},
+            prices=[
+                SimpleNamespace(
+                    std_id=1,
+                    formate_id=1,
+                    id=1,
+                    non_member_price_rate=0,
+                ),
+                SimpleNamespace(
+                    std_id=2,
+                    formate_id=1,
+                    id=2,
+                    non_member_price_rate=4400,
+                ),
+                SimpleNamespace(
+                    std_id=4,
+                    formate_id=1,
+                    id=4,
+                    non_member_price_rate=8800,
+                ),
+            ],
+        )
+        repository.get_international_equivalent_price_aliases = (
+            lambda master_ids, extra_designations=None: [adopted, commented]
+        )
+
+        result = service.build_enrichment_map(
+            [bis],
+            {
+                "BIS-12065": [
+                    "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
+                ]
+            },
+        )
+
+        self.assertEqual(result["BIS-12065"]["price"], 4400)
+
+        plain = SimpleNamespace(
+            Standard_id="BIS-9023",
+            sdo_id=21,
+            standardno="IS 9023",
+        )
+        plain_master = SimpleNamespace(
+            id=3,
+            Standard_id="BIS-9023",
+            sdo_id=21,
+            standardno="IS 9023",
+            display_stdNo="IS 9023 : Part 1",
+            standardyear=None,
+            DocumentAvailability=1,
+        )
+        plain_service, _repository = self._make_service(
+            [plain],
+            [plain_master],
+            currencies={21: {"code": "INR", "symbol": "₹"}},
+            sdo_titles={21: "BIS"},
+            prices=[
+                SimpleNamespace(
+                    std_id=3,
+                    formate_id=1,
+                    id=3,
+                    non_member_price_rate=900,
+                ),
+            ],
+        )
+        plain_result = plain_service.build_enrichment_map([plain])
+        self.assertEqual(plain_result["BIS-9023"]["price"], 0)
 
 
 if __name__ == "__main__":

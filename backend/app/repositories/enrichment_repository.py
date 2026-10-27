@@ -650,12 +650,15 @@ class EnrichmentRepository:
             )
         ]
 
-    def get_international_equivalent_price_aliases(self, master_ids):
-        """Fetch database catalogue rows for explicit international references.
+    def get_international_equivalent_price_aliases(
+        self,
+        master_ids,
+        extra_designations=None,
+    ):
+        """Fetch catalogue rows for an edition named by a BIS adoption.
 
-        This is used for BIS adoptions whose designation names a precise
-        ISO/IEC/IEEE edition. The caller verifies the full parsed identity,
-        edition year, availability and price before borrowing anything.
+        The named publisher can be any catalogue publisher. The caller checks
+        the parsed identity and edition year before borrowing a price.
         """
         if not master_ids:
             return []
@@ -673,13 +676,19 @@ class EnrichmentRepository:
             ),
         )
         references = {}
-        for row in source_rows:
-            for value in (row.display_stdNo, row.standardno):
-                for reference in extract_international_references(value):
-                    references.setdefault(
-                        reference["identity"],
-                        reference,
-                    )
+        reference_texts = [
+            *(value for row in source_rows for value in (
+                row.display_stdNo,
+                row.standardno,
+            )),
+            *(extra_designations or []),
+        ]
+        for value in reference_texts:
+            for reference in extract_international_references(value):
+                references.setdefault(
+                    reference["identity"],
+                    reference,
+                )
         if not references:
             return []
 

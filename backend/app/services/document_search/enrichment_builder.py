@@ -3,6 +3,7 @@
 import re
 
 from app.utils.standard_identity import (
+    bis_names_another_standard,
     extract_international_references,
     parse_identity,
     standard_number_year,
@@ -75,11 +76,30 @@ def _master_ids_with_usable_price(masters, prices, sdo_title_map):
     return usable
 
 
+def _designation_text(master, adoption_text_by_standard_id):
+    values = [
+        getattr(master, "display_stdNo", None),
+        getattr(master, "standardno", None),
+    ]
+    values.extend(
+        (adoption_text_by_standard_id or {}).get(
+            getattr(master, "Standard_id", None),
+            [],
+        )
+    )
+    return " ".join(
+        str(value or "").strip()
+        for value in values
+        if str(value or "").strip()
+    )
+
+
 def build_enrichment_map(
     standards,
     enrichment_repository,
     price_identity_designation,
     filter_api_tc_classifications,
+    adoption_text_by_standard_id=None,
 ):
     if not standards:
         return {}
@@ -178,9 +198,15 @@ def build_enrichment_map(
         "get_international_equivalent_price_aliases",
         None,
     )
+    adoption_designations = [
+        text
+        for texts in (adoption_text_by_standard_id or {}).values()
+        for text in texts
+    ]
     international_price_aliases = (
         international_alias_lookup(
-            master_ids=bis_master_ids
+            master_ids=bis_master_ids,
+            extra_designations=adoption_designations,
         )
         if callable(international_alias_lookup)
         and bis_master_ids
@@ -377,13 +403,11 @@ def build_enrichment_map(
                     iter(best_format_prices)
                 )
 
-    # Resolve explicit BIS adoption references against exact, available
-    # ISO/IEC/IEEE catalogue editions. Unlike same-SDO aliases, these
-    # identities include the referenced publisher and edition year.
+    # Resolve the edition named by a BIS adoption. The named publisher can
+    # be any catalogue publisher. A commented CMV copy is a separate
+    # product, so the base edition supplies the price when both exist.
     international_prices_by_identity = {}
     for master in international_price_aliases:
-        if getattr(master, "DocumentAvailability", None) != 1:
-            continue
         sdo_name = str(sdo_title_map.get(master.sdo_id) or "").strip()
         identity = parse_identity(
             sdo_name,
@@ -420,6 +444,16 @@ def build_enrichment_map(
 
     resolved_international_prices = {}
     for identity, matching_entries in international_prices_by_identity.items():
+        base_entries = [
+            item
+            for item in matching_entries
+            if not re.search(
+                r"(?i)(?:^|[\s/(])CMV(?:[\s)/]|$)",
+                f"{item[0].display_stdNo or ''} {item[0].standardno or ''}",
+            )
+        ]
+        if base_entries:
+            matching_entries = base_entries
         sdo_name = identity[0]
         best_format = preferred_price_format(
             [entry for _master, entry in matching_entries],
@@ -458,11 +492,9 @@ def build_enrichment_map(
         sdo_name = str(sdo_title_map.get(master.sdo_id) or "").strip()
         if sdo_name.upper() != "BIS":
             continue
-        designation = " ".join(
-            str(value or "")
-            for value in (master.display_stdNo, master.standardno)
+        references = extract_international_references(
+            _designation_text(master, adoption_text_by_standard_id)
         )
-        references = extract_international_references(designation)
         reference_prices = {
             resolved_international_prices[reference["identity"]]
             for reference in references
@@ -481,23 +513,15 @@ def build_enrichment_map(
         sdo_name = str(
             sdo_title_map.get(master.sdo_id) or ""
         ).strip().upper()
-        designation = str(
-            " ".join(
-                value
-                for value in (
-                    str(master.display_stdNo or "").strip(),
-                    str(master.standardno or "").strip(),
-                )
-                if value
-            )
-        ).strip()
-        has_international_equivalent = bool(
-            re.search(r"(?i)\b(?:ISO|IEC|IEEE)\b", designation)
+        designation = _designation_text(
+            master,
+            adoption_text_by_standard_id,
         )
+        names_another_standard = bis_names_another_standard(designation)
         is_simple_is_edition = (
             sdo_name == "BIS"
-            and re.match(r"^IS\b", designation, re.IGNORECASE)
-            and not has_international_equivalent
+            and re.match(r"(?i)\s*(?:IS|BIS)\b", designation)
+            and not names_another_standard
         )
         exact_price = direct_price_by_master.get(master.id)
         international_price = international_price_by_standard.get(

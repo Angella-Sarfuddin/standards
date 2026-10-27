@@ -103,9 +103,29 @@ def assemble_results(
             standard
         )
 
+    adoption_text_by_standard_id = {}
+    for row in unique_prepared_rows.values():
+        requested_text = " ".join(
+            str(row.get(key) or "").strip()
+            for key in ("displaystdno", "result_displaystdno")
+        ).strip()
+        if not requested_text:
+            continue
+        for standard in (
+            local_matches.get(row["request_key"], [])
+            + master_matches.get(row["request_key"], [])
+        ):
+            standard_id = getattr(standard, "Standard_id", None)
+            if not standard_id:
+                continue
+            texts = adoption_text_by_standard_id.setdefault(standard_id, [])
+            if requested_text not in texts:
+                texts.append(requested_text)
+
     enrichment_map = (
         service.build_enrichment_map(
-            matched_standards
+            matched_standards,
+            adoption_text_by_standard_id,
         )
     )
     status_map = service.enrichment_repository.get_standard_status_map(
