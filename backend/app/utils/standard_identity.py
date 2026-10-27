@@ -288,7 +288,11 @@ def identity_index_cores(sdo_name: str, core: str, raw: str = "") -> List[str]:
     return list(dict.fromkeys(cores))
 
 
-def identity_lookup_core_tokens(sdo_name: str, core_token: str) -> List[str]:
+def identity_lookup_core_tokens(
+    sdo_name: str,
+    core_token: str,
+    qualifier: str = None,
+) -> List[str]:
     """Add catalogue query forms for legacy IEC numbers without the ``60``."""
     core = normalize_tokens(core_token)
     if not core:
@@ -300,6 +304,12 @@ def identity_lookup_core_tokens(sdo_name: str, core_token: str) -> List[str]:
         and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
     ):
         tokens.append(f"60{core}")
+    # "60079 28" is stored as "60079 : Part 28" or "60079-28". The bare
+    # core 60079 does not find either spelling.
+    part = re.fullmatch(r"PART:(\d+)", str(qualifier or "").upper())
+    root = normalize_identity_core(core)
+    if part and re.fullmatch(r"\d{4,}", root):
+        tokens.append(f"{root} PART {int(part.group(1))}")
     return list(dict.fromkeys(tokens))
 
 
@@ -491,7 +501,9 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
                 f"{spelling} {root} : Part {part}%",
                 f"{spelling} {root} : PART {part}%",
                 f"{spelling} {root} PART {part}%",
+                f"{spelling} {root}-{part}%",
                 f"{spelling} {root}-{part}-%",
+                f"{spelling} {root} {part}%",
                 f"{spelling} {root} {part}-%",
             ])
     return [
@@ -526,6 +538,22 @@ def like_pattern_is_prefix_indexable(pattern: str) -> bool:
     return text[wildcard_at:].replace("%", "") == ""
 
 
+def _catalogue_part_appears(value: str, root: str, part: str) -> bool:
+    """True when a compact designation contains this part, including hyphens.
+
+    ``60079-28:2023`` compacts to ``60079282023``. ``60079-280`` must not
+    satisfy a search for part 28.
+    """
+    return bool(
+        re.search(
+            rf"(?<!\d){re.escape(root)}(?:PART)?{re.escape(part)}"
+            rf"(?:SEC(?:TION)?\d{{1,2}}|[1-9]\d?)?"
+            rf"(?:(?:19|20)\d{{2}})?(?!\d)",
+            value,
+        )
+    )
+
+
 def identity_core_appears(normalized_value: str, core: str) -> bool:
     """True when ``core`` appears without a longer leading numeric prefix.
 
@@ -542,6 +570,14 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
     core = re.sub(r"(?<=\d)(?:19|20)\d{2}(?=[A-Z])", "", core)
     if not value or not core:
         return False
+
+    part_form = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", core)
+    if part_form and _catalogue_part_appears(
+        value,
+        part_form.group("root"),
+        part_form.group("part"),
+    ):
+        return True
 
     start = 0
     while True:

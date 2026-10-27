@@ -214,6 +214,7 @@ def find_master_matches(
             for lookup_core in identity_lookup_core_tokens(
                 search_sdo_name,
                 core,
+                row["identity"].get("qualifier"),
             )
         )
 

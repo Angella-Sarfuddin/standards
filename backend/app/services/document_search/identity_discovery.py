@@ -91,6 +91,7 @@ def discover_identity_candidates(identity_lookup_rows, repository):
             for lookup_core in identity_lookup_core_tokens(
                 search_sdo_name,
                 core,
+                identity.get("qualifier"),
             )
         )
 
