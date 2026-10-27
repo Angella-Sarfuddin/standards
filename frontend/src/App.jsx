@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -77,17 +77,17 @@ function App() {
   }, [isDark]);
 
   const sparklePositions = [
-    [6, 18, "#9b7cff", 13],
-    [15, 72, "#49b9ff", 11],
-    [24, 34, "#52d6a7", 15],
-    [33, 88, "#ffb852", 10],
-    [43, 14, "#f07caa", 12],
-    [52, 61, "#a58aff", 17],
-    [61, 27, "#4db8ff", 10],
-    [70, 81, "#4ed5a3", 13],
-    [79, 43, "#ffbd5b", 11],
-    [89, 12, "#ec7fb2", 15],
-    [95, 68, "#9d83ff", 12],
+    [6, 18, "#e10600", 13],
+    [15, 72, "#111111", 11],
+    [24, 34, "#e10600", 15],
+    [33, 88, "#5c5c5c", 10],
+    [43, 14, "#111111", 12],
+    [52, 61, "#e10600", 17],
+    [61, 27, "#5c5c5c", 10],
+    [70, 81, "#111111", 13],
+    [79, 43, "#e10600", 11],
+    [89, 12, "#5c5c5c", 15],
+    [95, 68, "#111111", 12],
   ];
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
@@ -98,13 +98,14 @@ function App() {
   const [searchRequestCount, setSearchRequestCount] = useState(0);
   const [previewPage, setPreviewPage] = useState(0);
   const [resultsPage, setResultsPage] = useState(0);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
 
-  const previewPageStart = previewPage * TABLE_PAGE_SIZE;
+  const previewPageStart = previewPage * pageSize;
   const visiblePreviewRows = previewRows.slice(
     previewPageStart,
-    previewPageStart + TABLE_PAGE_SIZE
+    previewPageStart + pageSize
   );
-  const resultsPageStart = resultsPage * TABLE_PAGE_SIZE;
+  const resultsPageStart = resultsPage * pageSize;
 
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
   const [isQuickSearching, setIsQuickSearching] = useState(false);
@@ -154,27 +155,67 @@ function App() {
     clearFileInput();
   };
 
-  const handleSearch = async () => {
-    const query = searchQuery.trim();
+  const searchRequestId = useRef(0);
+  const searchTimer = useRef(null);
 
-    if (!query) {
-      return;
-    }
-
+  const runSearch = async (query) => {
+    const requestId = searchRequestId.current + 1;
+    searchRequestId.current = requestId;
     setIsQuickSearching(true);
     setError("");
     setSearchResult(null);
 
     try {
       const response = await searchStandards(query);
+      if (requestId !== searchRequestId.current) {
+        return;
+      }
       setSearchResult(Array.isArray(response) ? response : []);
     } catch (err) {
+      if (requestId !== searchRequestId.current) {
+        return;
+      }
       console.error(err);
       setError(getApiErrorMessage(err, "Unable to search the standard."));
     } finally {
-      setIsQuickSearching(false);
+      if (requestId === searchRequestId.current) {
+        setIsQuickSearching(false);
+      }
     }
   };
+
+  const handleSearchQueryChange = (value) => {
+    setSearchQuery(value);
+    clearTimeout(searchTimer.current);
+
+    const query = value.trim();
+    if (!query) {
+      searchRequestId.current += 1;
+      setSearchResult(null);
+      setIsQuickSearching(false);
+      return;
+    }
+
+    setSearchResult(null);
+    searchTimer.current = setTimeout(() => {
+      runSearch(query);
+    }, 400);
+  };
+
+  const handleSearch = (submittedQuery) => {
+    const query = String(submittedQuery ?? searchQuery).trim();
+    if (!query) {
+      return;
+    }
+
+    clearTimeout(searchTimer.current);
+    setSearchQuery(query);
+    runSearch(query);
+  };
+
+  useEffect(() => {
+    return () => clearTimeout(searchTimer.current);
+  }, []);
 
   const handleFileChange = async (eventOrFile) => {
     const file = eventOrFile?.target?.files
@@ -360,8 +401,14 @@ function App() {
 
   const visibleSearchResults = filteredSearchResults.slice(
     resultsPageStart,
-    resultsPageStart + TABLE_PAGE_SIZE
+    resultsPageStart + pageSize
   );
+
+  const handlePageSizeChange = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    setPreviewPage(0);
+    setResultsPage(0);
+  };
 
   const toggleResultViewFilter = (nextFilter) => {
     setResultViewFilter((current) =>
@@ -562,14 +609,18 @@ function App() {
         ))}
       </div>
       <Toaster />
-      <TopBar isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
+      <TopBar
+        isDark={isDark}
+        onToggleTheme={() => setIsDark((current) => !current)}
+        searchQuery={searchQuery}
+        onSearchQueryChange={handleSearchQueryChange}
+        onSearch={handleSearch}
+        searchResult={searchResult}
+        isQuickSearching={isQuickSearching}
+      />
 
       {!workspaceVisible ? (
         <Landing
-          searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
-          onSearch={handleSearch}
-          searchResult={searchResult}
           selectedFile={selectedFile}
           onFileChange={handleFileChange}
           isExtracting={isExtracting}
@@ -577,9 +628,10 @@ function App() {
           visiblePreviewRows={visiblePreviewRows}
           previewPageStart={previewPageStart}
           previewPage={previewPage}
+          pageSize={pageSize}
           onPreviewPageChange={setPreviewPage}
+          onPageSizeChange={handlePageSizeChange}
           onVerify={handleStartSearch}
-          isQuickSearching={isQuickSearching}
           isSearchingDocuments={isSearchingDocuments}
         />
       ) : (
@@ -594,7 +646,9 @@ function App() {
           filteredCount={filteredSearchResults.length}
           visibleResults={visibleSearchResults}
           resultsPage={resultsPage}
+          pageSize={pageSize}
           onResultsPageChange={setResultsPage}
+          onPageSizeChange={handlePageSizeChange}
           resultViewFilter={resultViewFilter}
           matchedCount={matchedCount}
           notFoundCount={notFoundResults}

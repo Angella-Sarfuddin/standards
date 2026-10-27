@@ -1,6 +1,7 @@
 import { ArrowRight, Upload } from "lucide-react";
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 
 const formatFileSize = (size) => {
   if (size < 1024) {
@@ -57,7 +58,7 @@ export default function UploadZone({
         className={`block rounded-2xl focus-within:outline-none focus-within:ring-2 focus-within:ring-ring/60 ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
       >
         <Card
-          className={`min-h-28 flex-row flex-wrap items-center gap-3 border border-dashed px-4 py-4 shadow-none ring-0 transition-colors sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-5 ${isDragOver ? "border-primary bg-primary/5" : "border-border bg-card hover:border-primary/50 hover:bg-primary/[0.02]"}`}
+          className={`min-h-28 flex-row flex-wrap items-center gap-3 border border-dashed px-4 py-4 shadow-none ring-0 transition-colors sm:flex-nowrap sm:gap-4 sm:px-5 sm:py-5 ${isDragOver ? "border-primary bg-primary/10" : "border-border bg-card hover:border-primary hover:bg-primary/10"}`}
         >
           <div className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary sm:size-12">
             <Upload />
@@ -81,8 +82,9 @@ export default function UploadZone({
             </div>
           </div>
           <div className="ml-auto flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary/15 bg-primary/[0.04] px-3 text-sm font-medium text-primary sm:ml-0">
+            {isExtracting ? <Spinner /> : null}
             {isExtracting ? "Reading..." : selectedFile ? "Replace" : "Browse"}
-            <ArrowRight className="size-4" />
+            {isExtracting ? null : <ArrowRight className="size-4" />}
           </div>
         </Card>
       </label>

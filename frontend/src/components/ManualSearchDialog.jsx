@@ -1,5 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -64,8 +65,9 @@ export default function ManualSearchDialog({
             className="h-10 rounded-xl"
             disabled={loading || !value.trim()}
           >
+            {loading ? <Spinner /> : null}
             {loading ? "Searching..." : "Search Database"}
-            <ArrowRight />
+            {loading ? null : <ArrowRight />}
           </Button>
         </DialogFooter>
       </DialogContent>

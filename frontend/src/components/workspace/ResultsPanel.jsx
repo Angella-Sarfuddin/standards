@@ -1,5 +1,6 @@
 import { Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Select,
   SelectContent,
@@ -17,7 +18,9 @@ export default function ResultsPanel({
   filteredCount,
   visibleResults,
   resultsPage,
+  pageSize,
   onResultsPageChange,
+  onPageSizeChange,
   resultViewFilter,
   matchedCount,
   notFoundCount,
@@ -86,9 +89,12 @@ export default function ResultsPanel({
       )}
 
       <Pagination
+        id="results-rows-per-page"
         page={resultsPage}
         total={filteredCount}
+        pageSize={pageSize}
         onPageChange={onResultsPageChange}
+        onPageSizeChange={onPageSizeChange}
       />
 
       <div className="flex flex-col items-stretch justify-between gap-3 border-t border-border/70 pt-4 sm:flex-row sm:items-center">
@@ -122,7 +128,7 @@ export default function ResultsPanel({
             onClick={onExport}
             disabled={selectedCount === 0 || isExporting}
           >
-            <Download />
+            {isExporting ? <Spinner /> : <Download />}
             {isExporting
               ? "Exporting..."
               : `Export ${selectedCount} Selected`}
