@@ -98,13 +98,14 @@ function App() {
   const [searchRequestCount, setSearchRequestCount] = useState(0);
   const [previewPage, setPreviewPage] = useState(0);
   const [resultsPage, setResultsPage] = useState(0);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
 
-  const previewPageStart = previewPage * TABLE_PAGE_SIZE;
+  const previewPageStart = previewPage * pageSize;
   const visiblePreviewRows = previewRows.slice(
     previewPageStart,
-    previewPageStart + TABLE_PAGE_SIZE
+    previewPageStart + pageSize
   );
-  const resultsPageStart = resultsPage * TABLE_PAGE_SIZE;
+  const resultsPageStart = resultsPage * pageSize;
 
   const [workspaceVisible, setWorkspaceVisible] = useState(false);
   const [isQuickSearching, setIsQuickSearching] = useState(false);
@@ -154,13 +155,14 @@ function App() {
     clearFileInput();
   };
 
-  const handleSearch = async () => {
-    const query = searchQuery.trim();
+  const handleSearch = async (submittedQuery) => {
+    const query = String(submittedQuery ?? searchQuery).trim();
 
     if (!query) {
       return;
     }
 
+    setSearchQuery(query);
     setIsQuickSearching(true);
     setError("");
     setSearchResult(null);
@@ -360,8 +362,14 @@ function App() {
 
   const visibleSearchResults = filteredSearchResults.slice(
     resultsPageStart,
-    resultsPageStart + TABLE_PAGE_SIZE
+    resultsPageStart + pageSize
   );
+
+  const handlePageSizeChange = (nextPageSize) => {
+    setPageSize(nextPageSize);
+    setPreviewPage(0);
+    setResultsPage(0);
+  };
 
   const toggleResultViewFilter = (nextFilter) => {
     setResultViewFilter((current) =>
@@ -562,14 +570,18 @@ function App() {
         ))}
       </div>
       <Toaster />
-      <TopBar isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
+      <TopBar
+        isDark={isDark}
+        onToggleTheme={() => setIsDark((current) => !current)}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        onSearch={handleSearch}
+        searchResult={searchResult}
+        isQuickSearching={isQuickSearching}
+      />
 
       {!workspaceVisible ? (
         <Landing
-          searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
-          onSearch={handleSearch}
-          searchResult={searchResult}
           selectedFile={selectedFile}
           onFileChange={handleFileChange}
           isExtracting={isExtracting}
@@ -577,9 +589,10 @@ function App() {
           visiblePreviewRows={visiblePreviewRows}
           previewPageStart={previewPageStart}
           previewPage={previewPage}
+          pageSize={pageSize}
           onPreviewPageChange={setPreviewPage}
+          onPageSizeChange={handlePageSizeChange}
           onVerify={handleStartSearch}
-          isQuickSearching={isQuickSearching}
           isSearchingDocuments={isSearchingDocuments}
         />
       ) : (
@@ -594,7 +607,9 @@ function App() {
           filteredCount={filteredSearchResults.length}
           visibleResults={visibleSearchResults}
           resultsPage={resultsPage}
+          pageSize={pageSize}
           onResultsPageChange={setResultsPage}
+          onPageSizeChange={handlePageSizeChange}
           resultViewFilter={resultViewFilter}
           matchedCount={matchedCount}
           notFoundCount={notFoundResults}

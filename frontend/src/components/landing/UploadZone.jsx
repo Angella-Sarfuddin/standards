@@ -1,6 +1,7 @@
 import { ArrowRight, Upload } from "lucide-react";
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 
 const formatFileSize = (size) => {
   if (size < 1024) {
@@ -81,8 +82,9 @@ export default function UploadZone({
             </div>
           </div>
           <div className="ml-auto flex h-9 shrink-0 items-center gap-2 rounded-lg border border-primary/15 bg-primary/[0.04] px-3 text-sm font-medium text-primary sm:ml-0">
+            {isExtracting ? <Spinner /> : null}
             {isExtracting ? "Reading..." : selectedFile ? "Replace" : "Browse"}
-            <ArrowRight className="size-4" />
+            {isExtracting ? null : <ArrowRight className="size-4" />}
           </div>
         </Card>
       </label>

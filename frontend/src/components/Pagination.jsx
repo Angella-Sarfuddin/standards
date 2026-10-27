@@ -1,46 +1,96 @@
-import { TABLE_PAGE_SIZE } from "../constants.js";
-import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { PAGE_SIZE_OPTIONS } from "../constants.js";
 
-export default function Pagination({ page, total, onPageChange }) {
-  const pageCount = Math.ceil(total / TABLE_PAGE_SIZE);
-
-  if (pageCount <= 1) {
+export default function TablePagination({
+  page,
+  total,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+  id = "select-rows-per-page",
+}) {
+  if (total <= 0) {
     return null;
   }
 
-  const firstRow = page * TABLE_PAGE_SIZE + 1;
-  const lastRow = Math.min(firstRow + TABLE_PAGE_SIZE - 1, total);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const onFirstPage = page <= 0;
+  const onLastPage = page + 1 >= pageCount;
+
+  const changePage = (event, nextPage) => {
+    event.preventDefault();
+    onPageChange(nextPage);
+  };
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-1 text-xs text-muted-foreground sm:text-sm">
-      <span className="tabular-nums">
-        Showing {firstRow}-{lastRow} of {total}
-      </span>
-      <div className="flex items-center gap-1.5 sm:gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-9 rounded-lg"
-          onClick={() => onPageChange(page - 1)}
-          disabled={page === 0}
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <Field orientation="horizontal" className="w-fit">
+        <FieldLabel htmlFor={id}>Rows per page</FieldLabel>
+        <Select
+          value={String(pageSize)}
+          onValueChange={(value) => onPageSizeChange(Number(value))}
         >
-          Previous
-        </Button>
-        <span className="min-w-24 text-center text-xs font-medium tabular-nums text-foreground">
-          Page {page + 1} of {pageCount}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-9 rounded-lg"
-          onClick={() => onPageChange(page + 1)}
-          disabled={page + 1 >= pageCount}
-        >
-          Next
-        </Button>
-      </div>
+          <SelectTrigger className="w-20" id={id}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            <SelectGroup>
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </Field>
+      <Pagination className="mx-0 w-auto">
+        <PaginationContent>
+          <PaginationItem>
+            <PaginationPrevious
+              href="#"
+              aria-disabled={onFirstPage}
+              className={onFirstPage ? "pointer-events-none opacity-50" : undefined}
+              onClick={(event) => {
+                if (!onFirstPage) {
+                  changePage(event, page - 1);
+                } else {
+                  event.preventDefault();
+                }
+              }}
+            />
+          </PaginationItem>
+          <PaginationItem>
+            <PaginationNext
+              href="#"
+              aria-disabled={onLastPage}
+              className={onLastPage ? "pointer-events-none opacity-50" : undefined}
+              onClick={(event) => {
+                if (!onLastPage) {
+                  changePage(event, page + 1);
+                } else {
+                  event.preventDefault();
+                }
+              }}
+            />
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
     </div>
   );
 }

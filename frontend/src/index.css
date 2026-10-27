@@ -127,6 +127,15 @@ html.dark body {
   isolation: isolate;
 }
 
+.app-shell > section[aria-label^="Notifications"] {
+  position: relative;
+  z-index: 200;
+}
+
+[data-sonner-toaster] {
+  z-index: 200;
+}
+
 .app-shell::before {
   position: fixed;
   z-index: 0;

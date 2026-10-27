@@ -1,5 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Card,
   CardAction,
@@ -24,7 +25,9 @@ export default function PreviewTable({
   visiblePreviewRows,
   previewPageStart,
   previewPage,
+  pageSize,
   onPreviewPageChange,
+  onPageSizeChange,
   onVerify,
   isSearchingDocuments,
 }) {
@@ -51,8 +54,9 @@ export default function PreviewTable({
             className="h-10 w-full rounded-xl sm:w-auto"
             disabled={isSearchingDocuments}
           >
+            {isSearchingDocuments ? <Spinner /> : null}
             {isSearchingDocuments ? "Verifying..." : "Verify & Search"}
-            <ArrowRight />
+            {isSearchingDocuments ? null : <ArrowRight />}
           </Button>
         </CardAction>
       </CardHeader>
@@ -85,9 +89,12 @@ export default function PreviewTable({
           </Table>
         </div>
         <Pagination
+          id="preview-rows-per-page"
           page={previewPage}
           total={previewRows.length}
+          pageSize={pageSize}
           onPageChange={onPreviewPageChange}
+          onPageSizeChange={onPageSizeChange}
         />
       </CardContent>
     </Card>
