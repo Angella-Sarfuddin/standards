@@ -722,6 +722,24 @@ class EnrichmentRepository:
             patterns = {f"%{core}%"} if core else set()
             if len(parts) > 1:
                 patterns.add("%" + "%".join(parts) + "%")
+            numbered = re.fullmatch(
+                r"(?P<root>\d+)PART(?P<part>\d+)",
+                normalize_identity_core(identity.get("core_number") or ""),
+            )
+            if numbered:
+                root = numbered.group("root")
+                part = str(int(numbered.group("part")))
+                patterns.add(f"%{root}-{part}%")
+                patterns.add(f"%{root} {part}%")
+                patterns.add(f"%{root}%{part}%")
+                section = re.fullmatch(
+                    r"SECTION:(\d+)",
+                    str(identity.get("qualifier") or ""),
+                )
+                if section:
+                    patterns.add(
+                        f"%{root}-{part}-{int(section.group(1))}%"
+                    )
             if not patterns:
                 continue
             filters.append(
