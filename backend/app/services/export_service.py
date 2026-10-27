@@ -9,6 +9,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from app.services.grouping_service import GroupingService
 from app.utils.api_classification_filter import filter_api_classifications
+from app.utils.standard_identity import bis_names_another_standard
 
 
 class ExportService:
@@ -93,19 +94,16 @@ class ExportService:
                 result.get("requested_sdo"),
                 standard.get("display_stdNo") or standard.get("standardno"),
             )
-            has_international_equivalent = bool(
-                re.search(
-                    r"(?i)\b(?:ISO|IEC|IEEE)\b",
-                    f"{requested_standard} {catalog_designation}",
-                )
-            )
             is_simple_is_edition = bool(
                 is_bis_standard
                 and re.match(
                     r"(?i)\s*(?:IS|BIS)\b",
                     f"{requested_standard} {catalog_designation}",
                 )
-                and not has_international_equivalent
+                and not bis_names_another_standard(
+                    requested_standard,
+                    catalog_designation,
+                )
             )
             # Plain IS editions are free; discard any paid alias amount.
             # ISO/IEC/IEEE adoptions retain their listed database price.

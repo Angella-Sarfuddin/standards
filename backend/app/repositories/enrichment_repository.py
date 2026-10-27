@@ -13,7 +13,9 @@ from app.models.standard_classification import StandardClassification
 from app.models.sdo_classification import SDOClassification
 from app.models.sdo import SDO
 from app.utils.standard_identity import (
+    adoption_price_like_patterns,
     identity_core_appears,
+    sdo_identifier_prefixes,
     identity_discovery_terms,
     normalize_identity_core,
     parse_identity,
@@ -624,20 +626,33 @@ class EnrichmentRepository:
                     prefixes.add(match.group(1))
         if not prefixes:
             return []
-        aliases = run_with_retry(
-            self.db,
-            lambda: self.db.query(StandardMaster)
-            .join(SDO, SDO.id == StandardMaster.sdo_id)
-            .filter(
-                SDO.sdo_title == "BIS",
-                or_(
-                    *[
-                        StandardMaster.standardno.ilike(f"%{prefix}%")
-                        for prefix in prefixes
-                    ]
+        patterns = [
+            f"{spelling} {prefix}%"
+            for spelling in sdo_identifier_prefixes("BIS")
+            for prefix in prefixes
+        ]
+        likes = [
+            field.like(pattern)
+            for field in (
+                StandardMaster.display_stdNo,
+                StandardMaster.standardno,
+            )
+            for pattern in patterns
+        ]
+        aliases_by_id = {}
+        for offset in range(0, len(likes), 200):
+            batch = likes[offset:offset + 200]
+            found = run_with_retry(
+                self.db,
+                lambda batch=batch: self.db.query(StandardMaster)
+                .join(SDO, SDO.id == StandardMaster.sdo_id)
+                .filter(
+                    SDO.sdo_title == "BIS",
+                    or_(*batch),
                 ),
-            ),
-        )
+            )
+            aliases_by_id.update((alias.id, alias) for alias in found)
+        aliases = list(aliases_by_id.values())
         return [
             alias
             for alias in aliases
@@ -650,12 +665,15 @@ class EnrichmentRepository:
             )
         ]
 
-    def get_international_equivalent_price_aliases(self, master_ids):
-        """Fetch database catalogue rows for explicit international references.
+    def get_international_equivalent_price_aliases(
+        self,
+        master_ids,
+        extra_designations=None,
+    ):
+        """Fetch catalogue rows for an edition named by a BIS adoption.
 
-        This is used for BIS adoptions whose designation names a precise
-        ISO/IEC/IEEE edition. The caller verifies the full parsed identity,
-        edition year, availability and price before borrowing anything.
+        The named publisher can be any catalogue publisher. The caller checks
+        the parsed identity and edition year before borrowing a price.
         """
         if not master_ids:
             return []
@@ -673,13 +691,19 @@ class EnrichmentRepository:
             ),
         )
         references = {}
-        for row in source_rows:
-            for value in (row.display_stdNo, row.standardno):
-                for reference in extract_international_references(value):
-                    references.setdefault(
-                        reference["identity"],
-                        reference,
-                    )
+        reference_texts = [
+            *(value for row in source_rows for value in (
+                row.display_stdNo,
+                row.standardno,
+            )),
+            *(extra_designations or []),
+        ]
+        for value in reference_texts:
+            for reference in extract_international_references(value):
+                references.setdefault(
+                    reference["identity"],
+                    reference,
+                )
         if not references:
             return []
 
@@ -708,11 +732,11 @@ class EnrichmentRepository:
                 reference["sdo_name"],
                 reference["designation"],
             )
-            core = str(identity.get("core") or "").strip()
-            parts = re.findall(r"[A-Z]+|\d+", core, re.IGNORECASE)
-            patterns = {f"%{core}%"} if core else set()
-            if len(parts) > 1:
-                patterns.add("%" + "%".join(parts) + "%")
+            patterns = adoption_price_like_patterns(
+                reference["sdo_name"],
+                identity.get("core_number") or "",
+                identity.get("qualifier"),
+            )
             if not patterns:
                 continue
             filters.append(
@@ -720,7 +744,7 @@ class EnrichmentRepository:
                     StandardMaster.sdo_id.in_(sdo_ids),
                     or_(
                         *(
-                            field.ilike(pattern)
+                            field.like(pattern)
                             for field in (
                                 StandardMaster.standardno,
                                 StandardMaster.display_stdNo,
