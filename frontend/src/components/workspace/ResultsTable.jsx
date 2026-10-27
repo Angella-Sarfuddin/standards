@@ -65,7 +65,7 @@ export default function ResultsTable({
             return (
               <TableRow
                 key={`result-${getResultKey(result)}`}
-                className="transition-colors hover:bg-primary/[0.025]"
+                className="transition-colors hover:bg-primary/10"
                 data-state={checked ? "selected" : undefined}
               >
                 <TableCell className="text-center align-top tabular-nums">

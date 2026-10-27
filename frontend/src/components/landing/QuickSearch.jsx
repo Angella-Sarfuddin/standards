@@ -1,5 +1,6 @@
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Card,
   CardContent,
@@ -42,7 +43,7 @@ export default function QuickSearch({
             className="h-11 rounded-xl px-4 shadow-sm"
             disabled={isQuickSearching || !searchQuery.trim()}
           >
-            <Search />
+            {isQuickSearching ? <Spinner /> : <Search />}
             {isQuickSearching ? "Searching..." : "Search"}
           </Button>
         </div>
