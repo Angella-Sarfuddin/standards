@@ -77,6 +77,7 @@ def deduplicate_results(results, service_class):
         seen.add(key)
         deduplicated.append(result)
     for result in deduplicated:
+        result.pop("_edition_rewritten", None)
         source_identity = result.pop(
             "_source_request_identity",
             None,

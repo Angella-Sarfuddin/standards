@@ -50,11 +50,6 @@ def _select_candidate(
         ]
         if active_candidates:
             candidates = active_candidates
-        elif any(
-            getattr(candidate, "status_id", None) in status_map
-            for candidate in candidates
-        ):
-            return None
 
     validated = [
         candidate
@@ -99,6 +94,7 @@ def _select_candidate(
                 # newest matching edition before using prefix as a tie-breaker.
                 return (
                     year,
+                    int(getattr(candidate, "DocumentAvailability", 1) == 1),
                     exact_prefix,
                     int(getattr(candidate, "recent", 0) == 1),
                     int(hasattr(candidate, "standardyear")),
@@ -106,6 +102,7 @@ def _select_candidate(
             return (
                 exact_prefix,
                 year,
+                int(getattr(candidate, "DocumentAvailability", 1) == 1),
                 int(getattr(candidate, "recent", 0) == 1),
                 int(hasattr(candidate, "standardyear")),
             )
@@ -161,11 +158,6 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         ]
         if active_candidates:
             candidates = active_candidates
-        elif any(
-            getattr(candidate, "status_id", None) in status_map
-            for candidate in candidates
-        ):
-            return []
     if not candidates:
         return []
 
@@ -184,16 +176,6 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         ]
         if explicitly_available:
             candidates = explicitly_available
-        elif status_map:
-            candidates_with_status = [
-                candidate
-                for candidate in candidates
-                if getattr(candidate, "status_id", None) in status_map
-            ]
-            if candidates_with_status:
-                # Every status-known record is unavailable. A yearless
-                # current-edition request must not fall back to one.
-                return []
 
     validated = [
         candidate
@@ -218,11 +200,6 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         ]
         if active_candidates:
             validated = active_candidates
-        elif any(
-            getattr(candidate, "status_id", None) in status_map
-            for candidate in validated
-        ):
-            return []
 
     requested_prefix = service_class._normalized_identifier_prefix(
         row["identity"].get("identifier_prefix") or ""
@@ -248,9 +225,13 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         )
         recent = int(getattr(candidate, "recent", 0) == 1)
         is_master_record = int(hasattr(candidate, "standardyear"))
+        has_document = int(
+            getattr(candidate, "DocumentAvailability", 1) == 1
+        )
         if service_class._is_api_request(row):
             return (
                 year,
+                has_document,
                 exact_prefix,
                 recent,
                 is_master_record,
@@ -258,6 +239,7 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         return (
             exact_prefix,
             year,
+            has_document,
             recent,
             is_master_record,
         )

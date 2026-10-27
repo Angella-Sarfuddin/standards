@@ -164,7 +164,7 @@ class StandardIdentityTests(unittest.TestCase):
                 {"name": "WITHDRAWN", "cart_show": 0},
                 SimpleNamespace(DocumentAvailability=1),
             ),
-            ("WITHDRAWN", False),
+            ("WITHDRAWN", True),
         )
 
     def test_historical_duplicate_status_applies_only_to_requested_edition(self):
@@ -216,6 +216,39 @@ class StandardIdentityTests(unittest.TestCase):
             row,
         )
         self.assertEqual([candidate.id for candidate in filtered], [1])
+
+    def test_visible_published_edition_wins_over_same_year_do_not_use_duplicate(self):
+        row = {
+            "sdo_name": "ISO",
+            "search_sdo_name": "ISO",
+            "requested_sdo_name": "ISO",
+            "identity": parse_identity("ISO", "ISO 8501-1"),
+        }
+        published = SimpleNamespace(
+            id=323760,
+            sdo_id=14,
+            status_id=23,
+            standardno="ISO 8501-1",
+            display_stdNo="ISO 8501-1:2007",
+            standardyear=2007,
+        )
+        do_not_use = SimpleNamespace(
+            id=526277,
+            sdo_id=14,
+            status_id=30,
+            standardno="ISO 8501-1",
+            display_stdNo="ISO 8501-1 : 2007",
+            standardyear=2007,
+        )
+        filtered = DocumentSearchService._prefer_catalog_visible_candidates(
+            [do_not_use, published],
+            {
+                23: {"name": "Published", "cart_show": 1, "std_show": 1},
+                30: {"name": "Do not Use", "cart_show": 0, "std_show": 0},
+            },
+            row,
+        )
+        self.assertEqual([candidate.id for candidate in filtered], [323760])
 
     def test_embedded_withdrawn_label_overrides_active_catalog_flag(self):
         row = {
@@ -349,7 +382,7 @@ class StandardIdentityTests(unittest.TestCase):
                 3: {"name": "WITHDRAWN", "cart_show": 0},
             },
         )
-        self.assertEqual(selected, [])
+        self.assertEqual([candidate.id for candidate in selected], [1])
 
     def test_old_year_iso_request_selects_newer_active_edition(self):
         row = {
@@ -415,7 +448,7 @@ class StandardIdentityTests(unittest.TestCase):
             )
         self.assertIs(selected, active_2026)
 
-    def test_current_iso_request_returns_no_candidate_when_all_are_withdrawn(self):
+    def test_current_iso_request_returns_latest_when_all_are_withdrawn(self):
         row = {
             "sdo_name": "ISO",
             "requested_sdo_name": "ISO",
@@ -436,7 +469,7 @@ class StandardIdentityTests(unittest.TestCase):
                 [withdrawn],
                 row,
             )
-        self.assertIsNone(selected)
+        self.assertIs(selected, withdrawn)
 
     def test_bis_revision_year_notation_reaches_catalog_lifecycle_lookup(self):
         self.assertTrue(
@@ -486,7 +519,7 @@ class StandardIdentityTests(unittest.TestCase):
                 None,
                 SimpleNamespace(DocumentAvailability=1),
             ),
-            ("STATUS UNKNOWN", False),
+            ("STATUS UNKNOWN", True),
         )
 
     def test_generic_sp_infers_publisher_when_catalog_match_is_unique(self):
@@ -697,6 +730,7 @@ class StandardIdentityTests(unittest.TestCase):
         patterns = identity_indexable_like_patterns("ISO", "9001")
         self.assertIn("ISO 9001%", patterns)
         self.assertIn("ISO9001%", patterns)
+        self.assertNotIn("ISO/DIS 9001%", patterns)
         self.assertTrue(
             all(like_pattern_is_prefix_indexable(pattern) for pattern in patterns)
         )

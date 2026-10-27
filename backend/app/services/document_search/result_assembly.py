@@ -161,7 +161,11 @@ def assemble_results(
                 {
                     **template,
                     "requested_sdo": row["sdo_name"],
-                    "requested_standard": row["result_displaystdno"],
+                    "requested_standard": (
+                        template["requested_standard"]
+                        if template.get("_edition_rewritten")
+                        else row["result_displaystdno"]
+                    ),
                     "_source_request_identity": row.get(
                         "source_request_identity"
                     ),
@@ -229,16 +233,6 @@ def assemble_results(
             # the catalogue instead of surfacing the 2000 edition.
             request_candidates = [hi_replacement]
 
-        # Discard unavailable records before edition selection.
-        request_candidates = [
-            candidate
-            for candidate in request_candidates
-            if service._candidate_has_database_document(
-                candidate,
-                enrichment_map,
-            )
-        ]
-
         if service._is_tema_edition_request(row):
             request_candidates = service._select_latest_tema_edition(
                 request_candidates,
@@ -304,17 +298,6 @@ def assemble_results(
                 else []
             )
 
-        # Reapply the availability gate after all replacement paths so
-        # none can bypass the database document and price requirements.
-        request_candidates = [
-            candidate
-            for candidate in request_candidates
-            if service._candidate_has_database_document(
-                candidate,
-                enrichment_map,
-            )
-        ]
-
         standards_by_id = {}
         for standard in request_candidates:
             standard_id = standard.Standard_id or standard.id
@@ -342,13 +325,12 @@ def assemble_results(
                 else:
                     data = service.search_service.format_standard(standard)
                     status = service.search_service.validate_standard(standard)
-                    is_match = status == "AVAILABLE"
                     status_info = status_map.get(
                         getattr(standard, "status_id", None)
                     )
+                    is_match = True
                     if not status_info:
                         status = "STATUS UNKNOWN"
-                        is_match = False
                     elif (
                             int(status_info.get("cart_show") or 0) != 1
                             or int(status_info.get("std_show") or 0) != 1
@@ -359,7 +341,6 @@ def assemble_results(
                         status = str(
                             status_info.get("name") or "UNAVAILABLE"
                         ).upper()
-                        is_match = False
                     actual_year = service._candidate_year(
                         standard,
                         row["sdo_name"],
@@ -396,13 +377,11 @@ def assemble_results(
                         row,
                         actual_year,
                     )
-                    is_match = False
                 embedded_lifecycle_status = (
                     service._candidate_embedded_lifecycle_status(standard)
                 )
                 if embedded_lifecycle_status:
                     status = embedded_lifecycle_status
-                    is_match = False
                     data["catalog_status"] = embedded_lifecycle_status
                 if service._is_api_request(row):
                     api_status_info = status_map.get(
@@ -420,7 +399,6 @@ def assemble_results(
                             )
                             else api_lifecycle.upper()
                         )
-                        is_match = False
 
                 # The BIS catalogue sometimes stores BIS-prefixed display
                 # numbers for standards requested under the IS designation.
@@ -461,6 +439,46 @@ def assemble_results(
                         "Requested TEMA edition is superseded; "
                         f"latest available edition is {actual_year}."
                     )
+                ieee_relationship_type = (
+                    getattr(ieee_resolution[0], "relationship_type", None)
+                    if ieee_resolution is not None
+                    else None
+                )
+                has_explicit_replacement = bool(
+                    hi_replacement is not None
+                    or (
+                        ieee_resolution is not None
+                        and ieee_resolution[1] is not None
+                    )
+                    or requested_tema_is_historical
+                )
+                if (
+                    is_match
+                    and has_explicit_replacement
+                    and not requested_tema_is_historical
+                    and requested_year is not None
+                    and actual_year is not None
+                    and int(requested_year) != int(actual_year)
+                ):
+                    status_detail = (
+                        (
+                            f"Requested edition {requested_year} was "
+                            "incorporated into the current consolidated "
+                            f"edition {actual_year}."
+                        )
+                        if ieee_relationship_type == "INCORPORATED_INTO"
+                        else (
+                            f"Requested edition {requested_year} is "
+                            "superseded; latest available edition is "
+                            f"{actual_year}."
+                        )
+                    )
+                current_designation = str(
+                    data.get("display_stdNo")
+                    or standard.display_stdNo
+                    or standard.standardno
+                    or ""
+                )
                 if (
                     not is_match
                     and requested_lifecycle_status
@@ -531,8 +549,20 @@ def assemble_results(
                         "classifications": [],
                     },
                 )
+                edition_rewritten = bool(
+                    is_match
+                    and (
+                        requested_tema_is_historical
+                        or (
+                            requested_year is not None
+                            and actual_year is not None
+                            and int(requested_year) != int(actual_year)
+                        )
+                    )
+                )
                 template = {
                     "requested_sdo": row["sdo_name"],
+                    "_edition_rewritten": edition_rewritten,
                     "requested_standard": (
                         str(
                             data.get("display_stdNo")
@@ -569,23 +599,35 @@ def assemble_results(
                         else status_detail
                     ),
                     "replacement_standard": (
-                        service._bis_replacement_standard(
-                            row.get("requested_sdo_name"),
-                            standard,
-                            status,
+                        current_designation
+                        if is_match and has_explicit_replacement
+                        else (
+                            service._bis_replacement_standard(
+                                row.get("requested_sdo_name"),
+                                standard,
+                                status,
+                            )
+                            if service._status_label_is_unavailable(status)
+                            else None
                         )
-                        if not is_match
-                        else None
                     ),
                     "superseded_by": (
-                        service._bis_superseded_by_note(status_detail)
-                        if not is_match
-                        and str(row.get("requested_sdo_name") or "")
-                        .strip()
-                        .upper()
-                        in {"BIS", "IS"}
-                        and "WITHDRAWN" in str(status or "").upper()
-                        else None
+                        current_designation
+                        if (
+                            is_match
+                            and has_explicit_replacement
+                            and ieee_relationship_type != "INCORPORATED_INTO"
+                        )
+                        else (
+                            service._bis_superseded_by_note(status_detail)
+                            if service._status_label_is_unavailable(status)
+                            and str(row.get("requested_sdo_name") or "")
+                            .strip()
+                            .upper()
+                            in {"BIS", "IS"}
+                            and "WITHDRAWN" in str(status or "").upper()
+                            else None
+                        )
                     ),
                     "standard": data if is_match else None,
                     "actions": {},
@@ -595,96 +637,6 @@ def assemble_results(
                 }
                 templates.append(template)
                 results.append(template)
-
-                # If the request names a different year, retain the exact
-                # requested edition as not found. A year difference alone
-                # does not establish that the available edition supersedes it.
-                if (
-                    is_match
-                    and requested_year is not None
-                    and actual_year is not None
-                    and int(requested_year) != int(actual_year)
-                    and not requested_tema_is_historical
-                ) or (
-                    is_match
-                    and requested_tema_is_historical
-                ):
-                    has_explicit_replacement = bool(
-                        hi_replacement is not None
-                        or (
-                            ieee_resolution is not None
-                            and ieee_resolution[1] is not None
-                        )
-                        or requested_tema_is_historical
-                    )
-                    ieee_relationship_type = (
-                        getattr(ieee_resolution[0], "relationship_type", None)
-                        if ieee_resolution is not None
-                        else None
-                    )
-                    historical_template = {
-                        "requested_sdo": row["sdo_name"],
-                        "requested_standard": row["result_displaystdno"],
-                        "matched": False,
-                        "status": "NOT FOUND",
-                        "status_detail": (
-                            (
-                                (
-                                    f"Requested edition {requested_year} was "
-                                    "incorporated into the current consolidated "
-                                    f"edition {actual_year}."
-                                    if ieee_relationship_type
-                                    == "INCORPORATED_INTO"
-                                    else (
-                                        f"Requested edition {requested_year} is "
-                                        "superseded; latest available edition is "
-                                        f"{actual_year}."
-                                    )
-                                )
-                                if has_explicit_replacement
-                                else (
-                                    f"Requested edition {requested_year} does not "
-                                    f"match the available edition {actual_year}."
-                                )
-                            )
-                            if requested_year is not None
-                            and int(requested_year) != int(actual_year)
-                            and not requested_tema_is_historical
-                            else (
-                                "Requested TEMA edition is superseded; "
-                                f"latest available edition is {actual_year}."
-                            )
-                        ),
-                        "replacement_standard": (
-                            str(
-                                data.get("display_stdNo")
-                                or standard.display_stdNo
-                                or standard.standardno
-                                or ""
-                            )
-                            if has_explicit_replacement
-                            else None
-                        ),
-                        "superseded_by": (
-                            str(
-                                data.get("display_stdNo")
-                                or standard.display_stdNo
-                                or standard.standardno
-                                or ""
-                            )
-                            if has_explicit_replacement
-                            and ieee_relationship_type
-                            != "INCORPORATED_INTO"
-                            else None
-                        ),
-                        "standard": None,
-                        "actions": {"manual_search": True},
-                        "_source_request_identity": row.get(
-                            "source_request_identity"
-                        ),
-                    }
-                    templates.append(historical_template)
-                    results.append(historical_template)
             result_templates[key] = templates
             continue
 

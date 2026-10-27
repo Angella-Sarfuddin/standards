@@ -75,6 +75,20 @@ function App() {
     document.documentElement.style.colorScheme = isDark ? "dark" : "light";
     localStorage.setItem("standards-intelligence-theme", isDark ? "dark" : "light");
   }, [isDark]);
+
+  const sparklePositions = [
+    [6, 18, "#9b7cff", 13],
+    [15, 72, "#49b9ff", 11],
+    [24, 34, "#52d6a7", 15],
+    [33, 88, "#ffb852", 10],
+    [43, 14, "#f07caa", 12],
+    [52, 61, "#a58aff", 17],
+    [61, 27, "#4db8ff", 10],
+    [70, 81, "#4ed5a3", 13],
+    [79, 43, "#ffbd5b", 11],
+    [89, 12, "#ec7fb2", 15],
+    [95, 68, "#9d83ff", 12],
+  ];
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
 
@@ -531,6 +545,22 @@ function App() {
 
   return (
     <div className="app-shell relative min-h-svh bg-background text-foreground">
+      <div className="sparkle-layer" aria-hidden="true">
+        {sparklePositions.map(([left, top, color, size], index) => (
+          <span
+            key={`${left}-${top}`}
+            className="sparkle"
+            style={{
+              left: `${left}%`,
+              top: `${top}%`,
+              "--sparkle-color": color,
+              "--sparkle-size": `${size}px`,
+              "--sparkle-delay": `${(index % 6) * -0.63}s`,
+              "--sparkle-duration": `${2.4 + (index % 4) * 0.55}s`,
+            }}
+          />
+        ))}
+      </div>
       <Toaster />
       <TopBar isDark={isDark} onToggleTheme={() => setIsDark((current) => !current)} />
 

@@ -384,14 +384,6 @@ def _select_master_candidate(
         ]
         if active_candidates:
             candidates = active_candidates
-        elif status_map:
-            known_status_candidates = [
-                candidate
-                for candidate in candidates
-                if getattr(candidate, "status_id", None) in status_map
-            ]
-            if known_status_candidates:
-                return None
 
     if not service_class._is_tema_edition_request(row):
         candidates = service_class._prefer_exact_designation(
@@ -421,6 +413,7 @@ def _select_master_candidate(
                 candidate,
                 row.get("search_sdo_name") or row["sdo_name"],
             ) or 0,
+            int(getattr(candidate, "DocumentAvailability", 1) == 1),
             int(getattr(candidate, "recent", 0) == 1),
         ),
         default=None,
@@ -476,11 +469,6 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
         ]
         if active_candidates:
             candidates = active_candidates
-        elif any(
-            getattr(candidate, "status_id", None) in status_map
-            for candidate in candidates
-        ):
-            return []
     if not service_class._is_bare_qualifier_request(row):
         root_candidates = [
             candidate

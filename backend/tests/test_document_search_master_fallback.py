@@ -20,6 +20,7 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
             recent=0,
             DocumentAvailability=0,
             url="",
+            title="",
         )
         second = SimpleNamespace(
             id=492834,
@@ -33,6 +34,7 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
             recent=0,
             DocumentAvailability=0,
             url="",
+            title="",
         )
         master_rows = [first, second]
         queried_master_ids = []
@@ -68,6 +70,7 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
         service = DocumentSearchService.__new__(DocumentSearchService)
         service.repository = LocalRepository()
         service.enrichment_repository = EnrichmentRepository()
+        service.build_enrichment_map = lambda _standards: {}
         service.resolve_sdo_ids = lambda names, fallback_names=None: {
             str(name).upper(): 77 for name in names
         }
@@ -93,12 +96,15 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
 
         self.assertEqual(set(queried_master_ids), {492833, 492834})
         self.assertTrue(
-            any(candidate_ids == {492833, 492834} and not selected_ids
-                for candidate_ids, selected_ids in selection_trace)
+            any(
+                candidate_ids == {492833, 492834} and len(selected_ids) == 1
+                for candidate_ids, selected_ids in selection_trace
+            )
         )
         self.assertEqual(len(results), 1)
-        self.assertFalse(results[0]["matched"])
-        self.assertIsNone(results[0]["standard"])
+        self.assertTrue(results[0]["matched"])
+        self.assertEqual(results[0]["status"], "WITHDRAWN")
+        self.assertIsNotNone(results[0]["standard"])
 
 
 if __name__ == "__main__":
