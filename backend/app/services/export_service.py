@@ -20,8 +20,8 @@ class ExportService:
         "Standard Year",
         "Edition Update",
         "Currency",
-        "TC",
         "Price",
+        "TC",
     ]
     GROUPING_COLUMNS = [
         "SDO",
@@ -115,10 +115,11 @@ class ExportService:
             if standard_year is None:
                 standard_year = enrichment.get("year")
 
-            currency = (
+            currency = str(
                 standard.get("currency")
                 or enrichment.get("currency")
-            )
+                or ""
+            ).strip() or None
 
             quotation_row = {
                 "SDO": ExportService._export_sdo(
@@ -144,12 +145,13 @@ class ExportService:
                 if result.get("status_detail")
                 else None,
                 "Currency": currency,
+                "Price": price,
             }
 
             # Keep one quotation row per found request. A standard may belong
-            # to several technical committees; list those assignments in the
-            # same cells instead of multiplying the standard across rows.
-            tc_codes = []
+            # to several committees; list their catalogue descriptions in the
+            # last column instead of multiplying the standard across rows.
+            tc_descriptions = []
             requested_sdo = re.sub(
                 r"[^A-Z0-9]",
                 "",
@@ -172,19 +174,14 @@ class ExportService:
                 if not code and not description or key in seen_classifications:
                     continue
                 seen_classifications.add(key)
-                tc_label = ExportService._classification_label(
-                    code,
-                    description,
-                    classification.get("owner_sdo"),
-                )
-                if tc_label and tc_label not in tc_codes:
-                    tc_codes.append(tc_label)
+                tc_text = description or code
+                if tc_text and tc_text not in tc_descriptions:
+                    tc_descriptions.append(tc_text)
 
             quotation_rows.append(
                 {
                     **quotation_row,
-                    "TC": ", ".join(tc_codes) or None,
-                    "Price": price,
+                    "TC": ", ".join(tc_descriptions) or None,
                 }
             )
 
