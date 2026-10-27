@@ -1971,6 +1971,36 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
+    def test_bis_adoption_of_any_publisher_is_priced_and_plain_is_is_not(self):
+        from app.utils.standard_identity import (
+            bis_names_another_standard,
+            extract_international_references,
+        )
+
+        adopted = extract_international_references(
+            "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
+        )
+        self.assertEqual(adopted[0]["sdo_name"], "IEC")
+        self.assertEqual(adopted[0]["identity"][3], 2021)
+        self.assertTrue(
+            bis_names_another_standard(
+                "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
+            )
+        )
+        self.assertTrue(
+            bis_names_another_standard(
+                "IS 15444 : 2020(ASTM A240/A240M : 2020)"
+            )
+        )
+        self.assertTrue(bis_names_another_standard("IS/IEC 60079 : Part 28 : 2015"))
+        self.assertTrue(bis_names_another_standard("IS IEC 60079 30-1"))
+        self.assertFalse(bis_names_another_standard("IS 9023 : Part 1"))
+        self.assertFalse(bis_names_another_standard("IS 9023:part 1"))
+        self.assertFalse(bis_names_another_standard("IS 6533 (Part 2) : 1989"))
+        self.assertFalse(
+            extract_international_references("IS 9023 : Part 1 : 1984")
+        )
+
     def test_bis_standard_designations_are_displayed_as_is(self):
         standard = {
             "standardno": "BIS 513",
@@ -2254,7 +2284,7 @@ class StandardIdentityTests(unittest.TestCase):
             validate_standard=lambda _standard: "AVAILABLE",
         )
         service.find_master_matches = lambda _rows: {}
-        service.build_enrichment_map = lambda _standards: {
+        service.build_enrichment_map = lambda _standards, _adoption_text=None: {
             "BIS3347": {
                 "document_available": True,
                 "has_database_price": True,
