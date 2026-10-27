@@ -31,6 +31,19 @@ export const getClassifications = (result) => {
   return Array.isArray(classifications) ? classifications : [];
 };
 
+export const formatTechnicalCommittee = (result) => {
+  const labels = [];
+  getClassifications(result).forEach((item) => {
+    const description = String(item?.description || "").trim();
+    const code = String(item?.code || "").trim();
+    const label = description || code;
+    if (label && !labels.includes(label)) {
+      labels.push(label);
+    }
+  });
+  return labels.join(", ");
+};
+
 export const hasSdo = (value) => {
   if (!value) {
     return false;

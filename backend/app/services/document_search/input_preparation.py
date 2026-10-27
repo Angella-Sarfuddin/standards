@@ -9,6 +9,7 @@ from app.utils.standard_identity import (
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
+    split_stated_replacement,
 )
 
 
@@ -39,6 +40,9 @@ def prepare_input_rows(
             row.get("displaystdno") or ""
         ).strip()
         displaystdno = remove_draft_marker(displaystdno)
+        stated_replacement = split_stated_replacement(displaystdno)
+        if stated_replacement:
+            displaystdno = stated_replacement["replacement"]
         if not requested_sdo_name and is_tema_edition_request(
             {"displaystdno": displaystdno}
         ):
@@ -231,6 +235,16 @@ def prepare_input_rows(
                 "search_sdo_name": search_sdo_name,
                 "displaystdno": displaystdno,
                 "result_displaystdno": lookup_displaystdno,
+                "stated_original": (
+                    stated_replacement["original"]
+                    if stated_replacement
+                    else None
+                ),
+                "stated_replacement": (
+                    stated_replacement["replacement"]
+                    if stated_replacement
+                    else None
+                ),
                 "has_revision_or_amendment": has_revision_or_amendment,
                 "full_display_number": full_display_number,
                 "sdo_id": sdo_id,

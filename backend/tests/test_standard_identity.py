@@ -762,6 +762,8 @@ class StandardIdentityTests(unittest.TestCase):
         single_part = identity_indexable_like_patterns("BIS", "60079PART28")
         self.assertIn("IS/IEC 60079 : Part 28%", single_part)
         self.assertIn("IS/IEC 60079-28%", single_part)
+        self.assertIn("IS 6533 : Part 2%", identity_indexable_like_patterns("BIS", "6533PART2"))
+        self.assertIn("IS 6533 (Part 2)%", identity_indexable_like_patterns("BIS", "6533PART2"))
         self.assertTrue(
             all(like_pattern_is_prefix_indexable(pattern) for pattern in part_patterns)
         )
@@ -1838,6 +1840,76 @@ class StandardIdentityTests(unittest.TestCase):
                 row,
             )
         self.assertIs(selected, latest)
+
+    def test_bis_printed_part_year_and_reaffirmation_keep_the_part(self):
+        sdo, number, _id_name = canonicalize_search_request(
+            "BIS",
+            "IS 6533 PART 2/-1989 (Reaffirmed 2017): Indian Standard",
+        )
+        identity = parse_identity(sdo, number)
+
+        self.assertEqual(identity["core_number"], "6533")
+        self.assertEqual(identity["qualifier"], "PART:2")
+        self.assertEqual(identity["year"], 1989)
+        self.assertTrue(
+            identity_matches(
+                identity,
+                parse_identity("BIS", "IS 6533 : Part 2 : 1989"),
+                check_year=False,
+            )
+        )
+        self.assertTrue(
+            identity_matches(
+                identity,
+                parse_identity("BIS", "IS 6533 (Part 2) : 1989"),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                identity,
+                parse_identity("BIS", "IS 6533 : Part 1 : 1989"),
+                check_year=False,
+            )
+        )
+
+    def test_withdrawn_and_replaced_sentence_searches_the_replacement(self):
+        from app.utils.standard_identity import split_stated_replacement
+
+        sentence = (
+            "API MPMS Ch. 6.2 Withdrawn and replaced "
+            "API MPMS Chapter 6.2A"
+        )
+        stated = split_stated_replacement(sentence)
+        self.assertEqual(stated["original"], "API MPMS Ch. 6.2")
+        self.assertEqual(stated["replacement"], "API MPMS Chapter 6.2A")
+
+        _sdo, number, _id_name = canonicalize_search_request("API", sentence)
+        replacement = parse_identity("API", number)
+        original = parse_identity("API", "API MPMS Ch. 6.2")
+
+        self.assertEqual(number, "API MPMS Chapter 6.2A")
+        self.assertFalse(identity_matches(original, replacement, check_year=False))
+
+        hyphenated = (
+            "API MPMS Ch. 6.6-WITHDRAWN and replaced by "
+            "API MPMS Chapter 6.3A : 2021"
+        )
+        stated = split_stated_replacement(hyphenated)
+        self.assertEqual(stated["original"], "API MPMS Ch. 6.6")
+        self.assertEqual(
+            stated["replacement"],
+            "API MPMS Chapter 6.3A : 2021",
+        )
+        _sdo, number, _id_name = canonicalize_search_request("API", hyphenated)
+        self.assertEqual(number, "API MPMS Chapter 6.3A : 2021")
+        self.assertFalse(
+            identity_matches(
+                parse_identity("API", "API MPMS Ch. 6.6"),
+                parse_identity("API", number),
+                check_year=False,
+            )
+        )
 
     def test_bis_standard_designations_are_displayed_as_is(self):
         standard = {

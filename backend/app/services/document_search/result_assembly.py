@@ -522,7 +522,8 @@ def assemble_results(
                         )
                         if (
                             status_detail
-                            and reaffirmation_note not in status_detail
+                            and reaffirmation_note.casefold()
+                            not in status_detail.casefold()
                         ):
                             status_detail = (
                                 f"{status_detail.rstrip()} "
@@ -537,8 +538,8 @@ def assemble_results(
                     # duplicated in the worksheet's two detail columns.
                     if status_detail:
                         status_detail = re.sub(
-                            r"(?i)(Reaffirmed in \\d{4}\\.)(?:\\s*\\1)+",
-                            r"\\1",
+                            r"(?i)(Reaffirmed in \d{4}\.)(?:\s*\1)+",
+                            r"\1",
                             status_detail,
                         )
 
@@ -554,6 +555,16 @@ def assemble_results(
                         "classifications": [],
                     },
                 )
+                if row.get("stated_replacement"):
+                    replacement_note = (
+                        f"{row.get('stated_original')} is withdrawn and "
+                        f"replaced by {row.get('stated_replacement')}."
+                    )
+                    status_detail = (
+                        f"{status_detail} {replacement_note}".strip()
+                        if status_detail
+                        else replacement_note
+                    )
                 edition_rewritten = bool(
                     is_match
                     and (
@@ -613,7 +624,11 @@ def assemble_results(
                                 status,
                             )
                             if service._status_label_is_unavailable(status)
-                            else None
+                            else (
+                                current_designation
+                                if is_match and row.get("stated_replacement")
+                                else row.get("stated_replacement")
+                            )
                         )
                     ),
                     "superseded_by": (
@@ -692,6 +707,11 @@ def assemble_results(
                 f"{unavailable_edition_status} in the catalogue "
                 "and is not available."
             )
+        elif row.get("stated_replacement"):
+            not_found_detail = (
+                f"{row.get('stated_original')} is withdrawn and replaced by "
+                f"{row.get('stated_replacement')}, which is not in the catalogue."
+            )
         else:
             not_found_detail = None
         template = {
@@ -706,7 +726,7 @@ def assemble_results(
             "replacement_standard": (
                 ieee_metadata.replacement_designation
                 if ieee_metadata
-                else None
+                else row.get("stated_replacement")
             ),
             "superseded_by": (
                 ieee_metadata.replacement_designation
