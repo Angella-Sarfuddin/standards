@@ -345,18 +345,32 @@ def identity_lookup_core_tokens(
     if not core:
         return []
 
-    tokens = [core]
-    if (
-        normalize_tokens(sdo_name) == "IEC"
-        and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
-    ):
-        tokens.append(f"60{core}")
-    # "60079 28" is stored as "60079 : Part 28" or "60079-28". The bare
-    # core 60079 does not find either spelling.
-    part = re.fullmatch(r"PART:(\d+)", str(qualifier or "").upper())
+    qualifier_text = str(qualifier or "").upper()
+    part = re.fullmatch(r"PART:(\d+)", qualifier_text)
+    section = re.fullmatch(r"SECTION:(\d+)", qualifier_text)
     root = normalize_identity_core(core)
-    if part and re.fullmatch(r"\d{4,}", root):
+    numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", root)
+    tokens = []
+    # A part or section request must not search the bare root. "60079%"
+    # returns every part of that standard.
+    if section and numbered:
+        tokens.append(
+            f"{numbered.group('root')} PART {int(numbered.group('part'))} "
+            f"SECTION {int(section.group(1))}"
+        )
+    elif part and re.fullmatch(r"\d{4,}", root):
         tokens.append(f"{root} PART {int(part.group(1))}")
+    elif numbered:
+        tokens.append(
+            f"{numbered.group('root')} PART {int(numbered.group('part'))}"
+        )
+    else:
+        tokens.append(core)
+        if (
+            normalize_tokens(sdo_name) == "IEC"
+            and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
+        ):
+            tokens.append(f"60{core}")
     return list(dict.fromkeys(tokens))
 
 
@@ -525,35 +539,90 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
     if not compact or not prefix or len(compact) < _MIN_CONTAINMENT_CORE_LEN:
         return []
 
-    patterns = [
-        f"{prefix} {compact}%",
-        f"{prefix}{compact}%",
-    ]
-    glued = normalize_identity_core(prefix)
-    compact_prefix = prefix.replace(" ", "")
-    if glued and glued not in {prefix, compact_prefix}:
-        patterns.append(f"{glued}{compact}%")
-    if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
-        patterns.append(f"{compact}%")
-    # "60079 30-1" is stored as "60079 : Part 30 : Sec 1" or "60079-30-1".
-    # The compact core 60079PART30 does not occur as a left prefix of either.
-    part_and_section = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", compact)
-    if part_and_section:
-        root = part_and_section.group("root")
-        part = str(int(part_and_section.group("part")))
-        for spelling in {prefix, "IS", "IS/IEC", "IS/IEC/IEEE", "IEC/IEEE"}:
-            if not spelling:
+    numbered_part = re.fullmatch(
+        r"(?P<root>\d+)PART(?P<part>\d+)(?:SECTION(?P<section>\d+))?",
+        compact,
+    )
+    patterns = []
+    if not numbered_part:
+        patterns.extend([
+            f"{prefix} {compact}%",
+            f"{prefix}{compact}%",
+        ])
+        glued = normalize_identity_core(prefix)
+        compact_prefix = prefix.replace(" ", "")
+        if glued and glued not in {prefix, compact_prefix}:
+            patterns.append(f"{glued}{compact}%")
+        if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
+            patterns.append(f"{compact}%")
+    else:
+        # One family prefix per spelling. A long root such as 60079 is a
+        # small index range; the part and section are checked afterwards.
+        # Listing every Part/Sec spelling here multiplies the ranges until
+        # the query stops using the index. Short roots stay specific so
+        # "IS 5%" is never searched.
+        root = numbered_part.group("root")
+        part = str(int(numbered_part.group("part")))
+        section = numbered_part.group("section")
+        for spelling in sdo_identifier_prefixes(prefix):
+            if len(root) >= 4:
+                patterns.append(f"{spelling} {root}%")
                 continue
-            patterns.extend([
-                f"{spelling} {root} : Part {part}%",
-                f"{spelling} {root} : PART {part}%",
-                f"{spelling} {root} PART {part}%",
-                f"{spelling} {root} (Part {part})%",
-                f"{spelling} {root}-{part}%",
-                f"{spelling} {root}-{part}-%",
-                f"{spelling} {root} {part}%",
-                f"{spelling} {root} {part}-%",
-            ])
+            if section:
+                sec = str(int(section))
+                patterns.extend([
+                    f"{spelling} {root}-{part}-{sec}%",
+                    f"{spelling} {root} : Part {part} : Sec {sec}%",
+                    f"{spelling} {root} PART {part} SECTION {sec}%",
+                ])
+            else:
+                patterns.extend([
+                    f"{spelling} {root}-{part}%",
+                    f"{spelling} {root} : Part {part}%",
+                    f"{spelling} {root} {part}%",
+                    f"{spelling} {root} PART {part}%",
+                    f"{spelling} {root} (Part {part})%",
+                ])
+    return [
+        pattern
+        for pattern in dict.fromkeys(patterns)
+        if like_pattern_is_prefix_indexable(pattern)
+    ]
+
+
+def adoption_price_like_patterns(
+    sdo_name: str,
+    core_number: str,
+    qualifier: str = None,
+) -> List[str]:
+    """Indexable patterns for the one edition a BIS adoption names.
+
+    Search can read a whole family and pick the part afterwards. Price
+    lookup must not: ``IEC 60079%`` returns every part, amendment, and
+    redline. These patterns keep the part and, when present, the section.
+    """
+    compact = normalize_identity_core(core_number)
+    section = re.fullmatch(r"SECTION:(\d+)", str(qualifier or "").upper())
+    numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", compact)
+    patterns = []
+    if numbered:
+        root = numbered.group("root")
+        part = str(int(numbered.group("part")))
+        for spelling in sdo_identifier_prefixes(sdo_name):
+            if section:
+                sec = str(int(section.group(1)))
+                patterns.extend([
+                    f"{spelling} {root}-{part}-{sec}%",
+                    f"{spelling} {root} : Part {part} : Sec {sec}%",
+                ])
+            else:
+                patterns.extend([
+                    f"{spelling} {root}-{part}%",
+                    f"{spelling} {root} : Part {part}%",
+                ])
+    else:
+        for prefix in sdo_identifier_prefixes(sdo_name):
+            patterns.extend(identity_indexable_like_patterns(prefix, compact))
     return [
         pattern
         for pattern in dict.fromkeys(patterns)
@@ -584,6 +653,22 @@ def like_pattern_is_prefix_indexable(pattern: str) -> bool:
     if wildcard_at < 0:
         return True
     return text[wildcard_at:].replace("%", "") == ""
+
+
+def _catalogue_section_appears(value: str, root: str, part: str, section: str) -> bool:
+    """True when a compact designation is this part and section.
+
+    ``60079-35-2:2011`` compacts to ``600793522011``. Part 35 alone, or
+    section 1, does not satisfy section 2.
+    """
+    return bool(
+        re.search(
+            rf"(?<!\d){re.escape(root)}(?:PART)?{re.escape(part)}"
+            rf"(?:SEC(?:TION)?)?{re.escape(section)}"
+            rf"(?:(?:19|20)\d{{2}})?(?!\d)",
+            value,
+        )
+    )
 
 
 def _catalogue_part_appears(value: str, root: str, part: str) -> bool:
@@ -619,6 +704,18 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
     if not value or not core:
         return False
 
+    section_form = re.fullmatch(
+        r"(?P<root>\d+)PART(?P<part>\d+)SECTION(?P<section>\d+)",
+        core,
+    )
+    if section_form and _catalogue_section_appears(
+        value,
+        section_form.group("root"),
+        section_form.group("part"),
+        section_form.group("section"),
+    ):
+        return True
+
     part_form = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", core)
     if part_form and _catalogue_part_appears(
         value,
@@ -639,11 +736,17 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
 
 def sdo_identifier_prefixes(sdo_name: str) -> Tuple[str, ...]:
     sdo = normalize_tokens(sdo_name)
-    return tuple(
-        dict.fromkeys(
-            (sdo, *SDO_IDENTIFIER_PREFIX_ALIASES.get(sdo, ()))
-        )
-    ) if sdo else ()
+    if not sdo:
+        return ()
+    # IS and BIS are one catalogue. Compound adoptions such as IS/IEC
+    # and IS/ISO use the BIS prefix list.
+    names = [sdo]
+    if sdo == "IS":
+        names.append("BIS")
+    aliases = []
+    for name in names:
+        aliases.extend(SDO_IDENTIFIER_PREFIX_ALIASES.get(name, ()))
+    return tuple(dict.fromkeys((*names, *aliases)))
 
 
 def extract_year(value: str) -> Tuple[str, Optional[int]]:
@@ -843,6 +946,60 @@ def _prepare_display(display: str) -> str:
     return display
 
 
+def _catalogue_sdo_for_adoption(sdo: str, display: str) -> Tuple[str, str]:
+    """Keep an Indian adoption on the BIS catalogue.
+
+    ``IS/IEC``, ``IS/ISO``, ``IS/IEC/IEEE`` and the same chains written
+    with spaces are BIS rows. The publishers after IS stay on the
+    designation so the numeric standard can be read from either spelling.
+    """
+    compound = re.fullmatch(
+        r"(?:IS|BIS)(?:\s*/\s*[A-Z][A-Z0-9]*)+",
+        sdo,
+    )
+    if compound:
+        prefix = re.sub(r"\s*/\s*", "/", sdo)
+        if not re.match(
+            rf"(?i)^{re.escape(prefix)}(?=$|[\s:/.-]|\d)",
+            display,
+        ):
+            display = f"{prefix} {display}".strip()
+        return "BIS", display
+
+    if sdo in {"IS", "BIS"} and re.match(
+        r"(?i)^(?:BIS\s+)?IS\s*/\s*[A-Z]",
+        display,
+    ):
+        return "BIS", display
+    return sdo, display
+
+
+def _strip_leading_publishers(body: str) -> str:
+    """Drop adopted publisher words that sit in front of the number.
+
+    ``IEC 60079`` and ``ISO/IEC 60079`` are the same numeric standard.
+    Designation words such as ``SP`` and qualifier words such as ``PART``
+    stay in place.
+    """
+    body = body.strip()
+    while body:
+        match = re.match(r"^([A-Z][A-Z0-9]*)(?:\s*/\s*|\s+)", body)
+        if not match:
+            break
+        token = match.group(1)
+        if (
+            token in DESIGNATION_TOKENS
+            or token in _ADOPTION_QUALIFIER_WORDS
+            or not re.fullmatch(r"[A-Z]{2,}", token)
+        ):
+            break
+        rest = body[match.end():].strip()
+        if not re.match(r"(?:[A-Z]{2,}(?:\s*/\s*|\s+)|\d)", rest):
+            break
+        body = rest
+    return body
+
+
 def canonicalize_search_request(
     sdo_name: str,
     display_number: str,
@@ -856,6 +1013,7 @@ def canonicalize_search_request(
     """
     sdo = clean(sdo_name).upper()
     display = _prepare_printed_designation(clean(display_number))
+    sdo, display = _catalogue_sdo_for_adoption(sdo, display)
     stated_replacement = split_stated_replacement(display)
     if stated_replacement:
         display = stated_replacement["replacement"]
@@ -878,6 +1036,16 @@ def canonicalize_search_request(
     # adoption marker from its display number.
     if sdo == "IEC" and re.match(r"(?i)^IS\s+IEC\b", display):
         display = re.sub(r"(?i)^IS\s+", "", display, count=1)
+    elif sdo and re.match(
+        rf"(?i)^(?:IS|BIS)\s*/\s*{re.escape(sdo)}\b",
+        display,
+    ):
+        display = re.sub(
+            r"(?i)^(?:IS|BIS)\s*/\s*",
+            "",
+            display,
+            count=1,
+        )
     elif sdo == "IEC" and re.match(r"(?i)^ISO\s+\d", display):
         sdo = "ISO"
     elif sdo == "IEC" and re.match(r"(?i)^BS\s+EN\b", display):
@@ -1183,29 +1351,43 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     normalized_sdo = normalize_tokens(sdo)
     identifier_prefix = normalized_sdo
     prefix_removed = False
-    for prefix in sorted(
-        sdo_identifier_prefixes(sdo),
-        key=len,
-        reverse=True,
-    ):
-        match = re.match(
-            rf"^{re.escape(prefix)}(?=$|[\s:/.-]|\d)",
+    if sdo in {"IS", "BIS"}:
+        adoption = re.match(
+            r"(?i)^((?:BIS\s+)?IS(?:\s*/\s*[A-Z][A-Z0-9]*)+)",
             body,
-            flags=re.IGNORECASE,
         )
-        if match:
-            identifier_prefix = prefix
-            body = body[match.end():].strip(" :/.-")
+        if adoption:
+            identifier_prefix = re.sub(
+                r"\s*/\s*",
+                "/",
+                adoption.group(1).upper(),
+            )
+            body = body[adoption.end():].strip(" :/.-")
             prefix_removed = True
-            # "HI ANSI/HI 9.8" still starts with a known identifier.
-            again = re.match(
-                rf"^(?:{'|'.join(re.escape(item) for item in sdo_identifier_prefixes(sdo))})(?=$|[\s:/.-]|\d)",
+    if not prefix_removed:
+        for prefix in sorted(
+            sdo_identifier_prefixes(sdo),
+            key=len,
+            reverse=True,
+        ):
+            match = re.match(
+                rf"^{re.escape(prefix)}(?=$|[\s:/.-]|\d)",
                 body,
                 flags=re.IGNORECASE,
             )
-            if again:
-                body = body[again.end():].strip(" :/.-")
-            break
+            if match:
+                identifier_prefix = prefix
+                body = body[match.end():].strip(" :/.-")
+                prefix_removed = True
+                # "HI ANSI/HI 9.8" still starts with a known identifier.
+                again = re.match(
+                    rf"^(?:{'|'.join(re.escape(item) for item in sdo_identifier_prefixes(sdo))})(?=$|[\s:/.-]|\d)",
+                    body,
+                    flags=re.IGNORECASE,
+                )
+                if again:
+                    body = body[again.end():].strip(" :/.-")
+                break
 
     body = re.sub(
         r"^(?:ANSI(?:\s*[-/]\s*|\s+)|GLOBAL\s+)",
@@ -1236,6 +1418,9 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
             flags=re.IGNORECASE,
         )
         body = body.strip(" :.,-/")
+
+    if sdo in {"IS", "BIS"}:
+        body = _strip_leading_publishers(body)
 
     # AMPP-NACE catalog entries vary between ``SP0775`` and ``SP 0775``.
     # Treat the compact form as the same SP designation and numeric core.
@@ -1282,21 +1467,33 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         r"\1 \2",
         core,
     )
-    # A trailing part-section is the standard, then the part, then the
-    # section: "60079 30-1" and the catalogue form "60079-30-1" are both
-    # standard 60079, part 30, section 1. A four-digit year such as
-    # 26-2006 is not a section. Excel month labels are removed earlier.
-    if sdo in {"IS", "BIS"}:
-        implicit_section = re.fullmatch(
-            r"(?P<root>\d{4,})(?:\s+|-)(?P<part>\d{1,2})-(?P<section>\d{1,2})",
-            core,
+    # "Part 35-2" is part 35, section 2. The same split is used for a
+    # bare numeric tail such as "35-2".
+    core = re.sub(
+        r"(?i)\b(?P<label>PART|PT)\s*(?P<part>\d+)\s*-\s*(?P<section>\d{1,2})\s*$",
+        lambda match: (
+            f"{match.group('label')} {int(match.group('part'))} SECTION "
+            f"{int(match.group('section'))}"
+        ),
+        core,
+    )
+    # A trailing part and section may be written as words or as two short
+    # numeric groups: "Part 35 : Sec 2" and "35-2" are the same division
+    # of the root standard. A four-digit year is not a section. Excel
+    # month labels are removed earlier.
+    implicit_section = re.fullmatch(
+        r"(?P<root>\d{3,})(?:\s+|-)(?P<part>\d{1,3})-(?P<section>\d{1,2})",
+        core,
+    )
+    if implicit_section and not re.fullmatch(
+        r"(?:19|20)\d{2}",
+        implicit_section.group("part"),
+    ):
+        core = (
+            f"{implicit_section.group('root')} PART "
+            f"{int(implicit_section.group('part'))} SECTION "
+            f"{int(implicit_section.group('section'))}"
         )
-        if implicit_section:
-            core = (
-                f"{implicit_section.group('root')} PART "
-                f"{int(implicit_section.group('part'))} SECTION "
-                f"{implicit_section.group('section')}"
-            )
     core = re.sub(r"([./:-])[./:-]+", r"\1", core)
     qualifier_match = QUALIFIER_RE.search(core)
     if qualifier_match:
@@ -1439,8 +1636,14 @@ _PUBLISHER_TOKEN = r"[A-Z][A-Z0-9]{1,}(?:\s*/\s*[A-Z][A-Z0-9]{1,})*"
 _ADOPTION_REFERENCE_RE = re.compile(
     rf"(?i)(?<![A-Z0-9])(?P<sdo>{_PUBLISHER_TOKEN})\s+"
     r"(?P<number>[A-Z0-9][A-Z0-9./-]*\d[A-Z0-9./-]*)"
-    r"(?:\s*[: ]\s*(?:PART|PT)\s*\d+"
-    r"(?:\s*[: ]\s*(?:SEC(?:TION)?)\s*\d+)?)?"
+    r"(?:"
+    r"\s*[: ]\s*(?:PART|PT)\s*\d+"
+    r"(?:"
+    r"\s*[: ]\s*(?:SEC(?:TION)?|CH(?:APTER)?)\s*\d+"
+    r"|(?:\s*[-/]\s*)\d{1,2}"
+    r")?"
+    r"|(?:\s*-\s*\d{1,3}\s*-\s*\d{1,2})"
+    r")?"
     r"\s*:\s*(?P<year>(?:19|20)\d{2})\b"
 )
 _JOINT_ADOPTION_RE = re.compile(
