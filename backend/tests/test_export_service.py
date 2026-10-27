@@ -343,22 +343,29 @@ class ExportServiceTests(unittest.TestCase):
                 master_ids,
                 additional_master_ids=None,
             ):
-                test_case.assertEqual(set(master_ids), {requested.id})
-                test_case.assertEqual(additional_master_ids, [alias.id])
-                return [
-                    SimpleNamespace(
-                        std_id=1,
-                        formate_id=1,
-                        id=1,
-                        non_member_price_rate=253,
-                    ),
-                    SimpleNamespace(
-                        std_id=2,
-                        formate_id=2,
-                        id=2,
-                        non_member_price_rate=227,
-                    ),
-                ]
+                requested_ids = set(master_ids or []) | set(
+                    additional_master_ids or []
+                )
+                rows = []
+                if requested.id in requested_ids:
+                    rows.append(
+                        SimpleNamespace(
+                            std_id=1,
+                            formate_id=1,
+                            id=1,
+                            non_member_price_rate=253,
+                        )
+                    )
+                if alias.id in requested_ids:
+                    rows.append(
+                        SimpleNamespace(
+                            std_id=2,
+                            formate_id=2,
+                            id=2,
+                            non_member_price_rate=227,
+                        )
+                    )
+                return rows
 
             def get_classifications_for_standards(self, _master_ids):
                 return []
@@ -435,6 +442,35 @@ class ExportServiceTests(unittest.TestCase):
         row = dict(zip(headers, [cell.value for cell in worksheet[2]]))
         self.assertEqual(row["Price"], 0)
         self.assertEqual(row["Currency"], "INR")
+
+    def test_bis_adoption_price_is_kept_for_any_named_publisher(self):
+        output = ExportService.export_results(
+            {
+                "results": [
+                    {
+                        "requested_sdo": "BIS",
+                        "requested_standard": (
+                            "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
+                        ),
+                        "matched": True,
+                        "standard": {
+                            "standardno": "IS 12065",
+                            "display_stdNo": "IS 12065 : 2025",
+                            "enrichment": {
+                                "price": 4400,
+                                "currency": "CHF",
+                                "classifications": [],
+                            },
+                        },
+                    }
+                ],
+                "grouping": {},
+            }
+        )
+        worksheet = load_workbook(output)["Quotation"]
+        headers = [cell.value for cell in worksheet[1]]
+        row = dict(zip(headers, [cell.value for cell in worksheet[2]]))
+        self.assertEqual(row["Price"], 4400)
 
     def test_bis_duplicate_catalog_price_prefers_nonzero_over_placeholder_zero(self):
         price_map = {}

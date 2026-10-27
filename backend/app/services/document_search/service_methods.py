@@ -1143,12 +1143,14 @@ class DocumentSearchServiceMethods:
     def build_enrichment_map(
         self,
         standards,
+        adoption_text_by_standard_id=None,
     ):
         return enrichment_builder.build_enrichment_map(
             standards,
             self.enrichment_repository,
             self._price_identity_designation,
             self._filter_api_tc_classifications,
+            adoption_text_by_standard_id,
         )
 
     @staticmethod

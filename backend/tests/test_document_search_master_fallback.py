@@ -70,7 +70,7 @@ class DocumentSearchMasterFallbackTests(unittest.TestCase):
         service = DocumentSearchService.__new__(DocumentSearchService)
         service.repository = LocalRepository()
         service.enrichment_repository = EnrichmentRepository()
-        service.build_enrichment_map = lambda _standards: {}
+        service.build_enrichment_map = lambda _standards, _adoption_text=None: {}
         service.resolve_sdo_ids = lambda names, fallback_names=None: {
             str(name).upper(): 77 for name in names
         }
