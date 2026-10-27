@@ -353,25 +353,21 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             ],
             [
                 ("ISO", "ISO 9001 : 2022", True, "AVAILABLE"),
-                ("ISO", "ISO 9001 : 2015", False, "NOT FOUND"),
-                ("ISO", "ISO 9001 : 2015", True, "AVAILABLE"),
-                ("ISO", "ISO 9001 : 2015", False, "NOT FOUND"),
+                ("ISO", "ISO 9001 : 2022", True, "AVAILABLE"),
                 ("ISO", "ISO 14001 : 2022", True, "AVAILABLE"),
-                ("ISO", "ISO 14001 : 2020", False, "NOT FOUND"),
                 ("API", "API 570 : 2019", False, "WITHDRAWN"),
                 ("BIS", "IS 2099 : 1986", False, "WITHDRAWN"),
                 ("IEC", "IEC 777", False, "NOT FOUND"),
                 ("UNKNOWN", "UNKNOWN 9", False, "SDO NOT FOUND"),
                 ("ISO", "ISO 3000 SERIES", True, "AVAILABLE"),
                 ("IEEE", "IEEE 99999 : 2024", True, "AVAILABLE"),
-                ("IEEE", "IEEE 99999 : 2016", False, "NOT FOUND"),
             ],
         )
         self.assertEqual(
             [result["source_row_identity"] for result in results],
-            [["a.xlsx", 2], ["a.xlsx", 2], ["a.xlsx", 3], ["a.xlsx", 3],
-             ["a.xlsx", 4], ["a.xlsx", 4], ["a.xlsx", 5], ["a.xlsx", 6],
-             ["a.xlsx", 7], ["a.xlsx", 8], ["a.xlsx", 9], ["a.xlsx", 10], ["a.xlsx", 10]],
+            [["a.xlsx", 2], ["a.xlsx", 3], ["a.xlsx", 4], ["a.xlsx", 5],
+             ["a.xlsx", 6], ["a.xlsx", 7], ["a.xlsx", 8], ["a.xlsx", 9],
+             ["a.xlsx", 10]],
         )
         self.assertEqual(results[0]["standard"], {
             "Standard_id": "ISO-9001-2022",
@@ -403,32 +399,34 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             "actions": {},
             "source_row_identity": ["a.xlsx", 2],
         })
+        self.assertEqual(results[1]["requested_standard"], "ISO 9001 : 2022")
         self.assertEqual(
             results[1]["status_detail"],
-            "Requested edition 2015 does not match the available edition 2022.",
+            "Requested year 2015; returned latest available edition 2022.",
         )
-        self.assertIsNone(results[1]["replacement_standard"])
-        self.assertIsNone(results[1]["superseded_by"])
-        self.assertEqual(results[4]["standard"]["catalog_status"], "ACTIVE")
-        self.assertEqual(results[5]["standard"], None)
+        self.assertEqual(results[2]["standard"]["catalog_status"], "ACTIVE")
         self.assertEqual(
-            results[5]["status_detail"],
-            "Requested edition 2020 does not match the available edition 2022.",
+            results[2]["status_detail"],
+            "Requested year 2020; returned latest available edition 2022.",
         )
-        self.assertIsNone(results[5]["replacement_standard"])
-        self.assertIsNone(results[5]["superseded_by"])
-        self.assertEqual(results[6]["standard"], None)
-        self.assertEqual(results[7]["replacement_standard"], "IS/IEC 60137 : 2017")
-        self.assertEqual(results[8]["standard"], None)
-        self.assertEqual(results[9], {
+        self.assertIsNone(results[3]["standard"])
+        self.assertIsNone(results[4]["standard"])
+        self.assertEqual(results[4]["replacement_standard"], "IS/IEC 60137 : 2017")
+        self.assertEqual(results[5]["standard"], None)
+        self.assertEqual(results[6], {
             "requested_sdo": "UNKNOWN", "requested_standard": "UNKNOWN 9", "matched": False,
             "status": "SDO NOT FOUND", "standard": None, "actions": {"manual_search": True},
             "not_found_reason": "SDO not found", "status_detail": "The requested SDO was not found in the catalog.",
             "source_row_identity": ["a.xlsx", 8],
         })
-        self.assertEqual(results[10]["standard"]["display_stdNo"], "ISO 3000 : Part 1 : 2020")
-        self.assertEqual(results[11]["standard"]["display_stdNo"], "IEEE 99999 : 2024")
-        self.assertEqual(results[11]["status_detail"], "Requested year 2016; returned latest available edition 2024.")
+        self.assertEqual(results[7]["standard"]["display_stdNo"], "ISO 3000 : Part 1 : 2020")
+        self.assertEqual(results[8]["standard"]["display_stdNo"], "IEEE 99999 : 2024")
+        self.assertEqual(
+            results[8]["status_detail"],
+            "Requested edition 2016 is superseded; latest available edition is 2024.",
+        )
+        self.assertEqual(results[8]["replacement_standard"], "IEEE 99999 : 2024")
+        self.assertEqual(results[8]["superseded_by"], "IEEE 99999 : 2024")
         self.assertEqual(enrichment_calls, [(11, 22, 33, 44, 55, 66)])
         self.assertEqual(
             [event for event in trace if event[0] in {"nace", "hi", "ieee_lookup", "ieee_replacement"}],
@@ -460,63 +458,72 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
                 ("format_local", 55), ("validate_local", 55),
                 ("select_current", rows[8]["request_key"], ()),
                 ("format_local", 66), ("validate_local", 66),
-                ("deduplicate", 13),
+                ("deduplicate", 9),
             ],
         )
         self.assertEqual([row.get("requested_edition_status") for row in rows], [None] * len(rows))
 
-    def test_synthetic_replacement_target_must_be_available_to_match(self):
-        for include_target, available, detail_fragment in (
-            (False, True, "not available in the local catalogue"),
-            (True, False, "not available in the local catalogue"),
-        ):
-            with self.subTest(include_target=include_target, available=available):
-                results, _trace, _enrichment_calls, _rows = self._run_search(
-                    include_ieee_target=include_target,
-                    ieee_target_available=available,
-                )
-                result = next(
-                    item
-                    for item in results
-                    if item["requested_standard"] == "IEEE 99999 : 2016"
-                )
-                self.assertFalse(result["matched"])
-                self.assertEqual(
-                    result["replacement_standard"], "IEEE 99999 : 2024"
-                )
-                self.assertIn(detail_fragment, result["status_detail"])
-
-    def test_synthetic_verified_replacement_populates_relationship_fields(self):
-        results, _trace, _enrichment_calls, _rows = self._run_search()
-        not_found = next(
+    def test_missing_successor_stays_not_found(self):
+        results, _trace, _enrichment_calls, _rows = self._run_search(
+            include_ieee_target=False,
+        )
+        result = next(
             item
             for item in results
             if item["requested_standard"] == "IEEE 99999 : 2016"
         )
+        self.assertFalse(result["matched"])
+        self.assertEqual(result["replacement_standard"], "IEEE 99999 : 2024")
+        self.assertIn("not available in the local catalogue", result["status_detail"])
 
-        self.assertFalse(not_found["matched"])
-        self.assertEqual(not_found["status"], "NOT FOUND")
-        self.assertEqual(
-            not_found["replacement_standard"], "IEEE 99999 : 2024"
+    def test_present_successor_is_found_without_a_document_file(self):
+        results, _trace, _enrichment_calls, _rows = self._run_search(
+            include_ieee_target=True,
+            ieee_target_available=False,
         )
-        self.assertEqual(not_found["superseded_by"], "IEEE 99999 : 2024")
+        result = next(
+            item
+            for item in results
+            if item["requested_standard"] == "IEEE 99999 : 2024"
+        )
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["standard"]["display_stdNo"], "IEEE 99999 : 2024")
+
+    def test_synthetic_verified_replacement_populates_relationship_fields(self):
+        results, _trace, _enrichment_calls, _rows = self._run_search()
+        matched = next(
+            item
+            for item in results
+            if item["requested_standard"] == "IEEE 99999 : 2024"
+        )
+
+        self.assertTrue(matched["matched"])
+        self.assertEqual(matched["status"], "AVAILABLE")
+        self.assertEqual(
+            matched["status_detail"],
+            "Requested edition 2016 is superseded; latest available edition is 2024.",
+        )
+        self.assertEqual(
+            matched["replacement_standard"], "IEEE 99999 : 2024"
+        )
+        self.assertEqual(matched["superseded_by"], "IEEE 99999 : 2024")
 
     def test_synthetic_incorporation_is_not_reported_as_supersession(self):
         results, _trace, _enrichment_calls, _rows = self._run_search(
             ieee_relationship_type="INCORPORATED_INTO"
         )
-        not_found = next(
+        matched = next(
             item
             for item in results
-            if item["requested_standard"] == "IEEE 99999 : 2016"
+            if item["requested_standard"] == "IEEE 99999 : 2024"
         )
 
-        self.assertFalse(not_found["matched"])
-        self.assertIn("incorporated into", not_found["status_detail"])
+        self.assertTrue(matched["matched"])
+        self.assertIn("incorporated into", matched["status_detail"])
         self.assertEqual(
-            not_found["replacement_standard"], "IEEE 99999 : 2024"
+            matched["replacement_standard"], "IEEE 99999 : 2024"
         )
-        self.assertIsNone(not_found["superseded_by"])
+        self.assertIsNone(matched["superseded_by"])
 
     def test_positive_nace_hi_tema_and_standalone_revision_assembly(self):
         # NACE canonical identity, HI replacement, and the TEMA naming
@@ -529,18 +536,20 @@ class DocumentSearchResultAssemblyTests(unittest.TestCase):
             [
                 ("NACE", "NACE MR0103 (ISO 17945) : 2023", True, "AVAILABLE"),
                 ("HI", "HI 14.6 : 2016", True, "AVAILABLE"),
-                ("HI", "HI 2.6 : 2000", False, "NOT FOUND"),
                 ("TEMA", "TEMA 2026 Edition : 2026", True, "AVAILABLE"),
-                ("TEMA", "TEMA Twelfth Edition", False, "NOT FOUND"),
                 ("ISO", "ISO 9001 AMD 1", False, "NOT FOUND"),
             ],
         )
         self.assertEqual(results[0]["standard"]["Standard_id"], "NACE-OFFICIAL-2023")
         self.assertEqual(results[1]["standard"]["Standard_id"], "HI-14.6-2016")
-        self.assertEqual(results[2]["replacement_standard"], "HI 14.6 : 2016")
-        self.assertEqual(results[3]["standard"]["display_stdNo"], "TEMA 2026 Edition : 2026")
-        self.assertEqual(results[4]["replacement_standard"], "TEMA 2026 Edition : 2026")
-        self.assertEqual(results[5]["status_detail"], "Revision/amendment requests are excluded from standard matching.")
+        self.assertEqual(
+            results[1]["status_detail"],
+            "Requested edition 2000 is superseded; latest available edition is 2016.",
+        )
+        self.assertEqual(results[1]["replacement_standard"], "HI 14.6 : 2016")
+        self.assertEqual(results[2]["standard"]["display_stdNo"], "TEMA 2026 Edition : 2026")
+        self.assertEqual(results[2]["replacement_standard"], "TEMA 2026 Edition : 2026")
+        self.assertEqual(results[3]["status_detail"], "Revision/amendment requests are excluded from standard matching.")
         self.assertEqual(
             [event for event in trace if event[0] in {"nace", "hi", "select_tema", "select_current"}],
             [

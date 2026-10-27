@@ -161,6 +161,63 @@ html.dark body {
   animation: sparkle-twinkle 3.8s ease-in-out infinite alternate;
 }
 
+.sparkle-layer {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sparkle {
+  position: absolute;
+  width: var(--sparkle-size, 12px);
+  aspect-ratio: 1;
+  color: var(--sparkle-color, #8b70ff);
+  opacity: 0.82;
+  filter: drop-shadow(0 0 5px currentColor) drop-shadow(0 0 12px currentColor);
+  animation: star-twinkle var(--sparkle-duration, 3.2s) ease-in-out var(--sparkle-delay, 0s) infinite;
+}
+
+.sparkle::before,
+.sparkle::after {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  content: "";
+  background: currentColor;
+}
+
+.sparkle::before {
+  width: 20%;
+  height: 100%;
+  clip-path: polygon(50% 0, 68% 36%, 100% 50%, 68% 64%, 50% 100%, 32% 64%, 0 50%, 32% 36%);
+}
+
+.sparkle::after {
+  width: 100%;
+  height: 20%;
+  clip-path: polygon(50% 0, 68% 36%, 100% 50%, 68% 64%, 50% 100%, 32% 64%, 0 50%, 32% 36%);
+}
+
+.sparkle:nth-child(3n) {
+  width: calc(var(--sparkle-size, 12px) * 0.72);
+}
+
+.sparkle:nth-child(4n) {
+  transform: rotate(45deg);
+}
+
+.dark .sparkle {
+  opacity: 1;
+}
+
+@keyframes star-twinkle {
+  0%, 100% { opacity: 0.25; scale: 0.72; }
+  45% { opacity: 0.95; scale: 1.12; }
+  60% { opacity: 0.7; scale: 0.94; }
+}
+
 .dark .app-shell::before {
   background:
     radial-gradient(ellipse at 8% 12%, rgb(130 93 255 / 28%), transparent 32%),
@@ -191,7 +248,8 @@ html.dark body {
 
 @media (prefers-reduced-motion: reduce) {
   .app-shell::before,
-  .app-shell::after { animation: none; }
+  .app-shell::after,
+  .sparkle { animation: none; }
 }
 
 .app-shell [data-slot="card"] {

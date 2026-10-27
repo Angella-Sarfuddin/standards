@@ -35,6 +35,23 @@ def _candidate_is_amendment(candidate):
     return False
 
 
+def _candidate_is_draft_stage(candidate):
+    """Draft stages such as DIS are not the published standard name."""
+    designation = " ".join(
+        str(value or "")
+        for value in (
+            getattr(candidate, "display_stdNo", ""),
+            getattr(candidate, "standardno", ""),
+        )
+    )
+    return bool(
+        re.search(
+            r"(?i)(?:^|[\s/(])(?:WD|CD|DIS|FDIS)(?:[\s/):]|$)",
+            designation,
+        )
+    )
+
+
 def _candidate_is_proposal(candidate):
     """Proposal records are not published standards for matching output."""
     designation = " ".join(
@@ -78,6 +95,7 @@ def _candidate_should_be_excluded(candidate, *, service_class):
     return (
         service_class._candidate_is_amendment(candidate)
         or bool(service_class._candidate_revision_suffix(candidate))
+        or service_class._candidate_is_draft_stage(candidate)
         or service_class._candidate_is_proposal(candidate)
         or service_class._candidate_is_ul_supplemental_publication(
             candidate

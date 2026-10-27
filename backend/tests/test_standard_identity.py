@@ -217,6 +217,39 @@ class StandardIdentityTests(unittest.TestCase):
         )
         self.assertEqual([candidate.id for candidate in filtered], [1])
 
+    def test_visible_published_edition_wins_over_same_year_do_not_use_duplicate(self):
+        row = {
+            "sdo_name": "ISO",
+            "search_sdo_name": "ISO",
+            "requested_sdo_name": "ISO",
+            "identity": parse_identity("ISO", "ISO 8501-1"),
+        }
+        published = SimpleNamespace(
+            id=323760,
+            sdo_id=14,
+            status_id=23,
+            standardno="ISO 8501-1",
+            display_stdNo="ISO 8501-1:2007",
+            standardyear=2007,
+        )
+        do_not_use = SimpleNamespace(
+            id=526277,
+            sdo_id=14,
+            status_id=30,
+            standardno="ISO 8501-1",
+            display_stdNo="ISO 8501-1 : 2007",
+            standardyear=2007,
+        )
+        filtered = DocumentSearchService._prefer_catalog_visible_candidates(
+            [do_not_use, published],
+            {
+                23: {"name": "Published", "cart_show": 1, "std_show": 1},
+                30: {"name": "Do not Use", "cart_show": 0, "std_show": 0},
+            },
+            row,
+        )
+        self.assertEqual([candidate.id for candidate in filtered], [323760])
+
     def test_embedded_withdrawn_label_overrides_active_catalog_flag(self):
         row = {
             "sdo_name": "ASME",
@@ -349,7 +382,7 @@ class StandardIdentityTests(unittest.TestCase):
                 3: {"name": "WITHDRAWN", "cart_show": 0},
             },
         )
-        self.assertEqual(selected, [])
+        self.assertEqual([candidate.id for candidate in selected], [1])
 
     def test_old_year_iso_request_selects_newer_active_edition(self):
         row = {
@@ -415,7 +448,7 @@ class StandardIdentityTests(unittest.TestCase):
             )
         self.assertIs(selected, active_2026)
 
-    def test_current_iso_request_returns_no_candidate_when_all_are_withdrawn(self):
+    def test_current_iso_request_returns_latest_when_all_are_withdrawn(self):
         row = {
             "sdo_name": "ISO",
             "requested_sdo_name": "ISO",
@@ -436,7 +469,7 @@ class StandardIdentityTests(unittest.TestCase):
                 [withdrawn],
                 row,
             )
-        self.assertIsNone(selected)
+        self.assertIs(selected, withdrawn)
 
     def test_bis_revision_year_notation_reaches_catalog_lifecycle_lookup(self):
         self.assertTrue(
@@ -478,6 +511,20 @@ class StandardIdentityTests(unittest.TestCase):
                 SimpleNamespace(DocumentAvailability=1),
             ),
             ("AVAILABLE", True),
+        )
+        self.assertEqual(
+            DocumentSearchService._master_result_status(
+                {"name": "Published", "cart_show": 1, "std_show": 1},
+                SimpleNamespace(DocumentAvailability=0),
+            ),
+            ("AVAILABLE", True),
+        )
+        self.assertEqual(
+            DocumentSearchService._master_result_status(
+                {"name": "Historical", "cart_show": 0, "std_show": 0},
+                SimpleNamespace(DocumentAvailability=1),
+            ),
+            ("HISTORICAL", False),
         )
 
     def test_missing_master_status_fails_closed(self):
@@ -697,6 +744,7 @@ class StandardIdentityTests(unittest.TestCase):
         patterns = identity_indexable_like_patterns("ISO", "9001")
         self.assertIn("ISO 9001%", patterns)
         self.assertIn("ISO9001%", patterns)
+        self.assertNotIn("ISO/DIS 9001%", patterns)
         self.assertTrue(
             all(like_pattern_is_prefix_indexable(pattern) for pattern in patterns)
         )
@@ -706,6 +754,17 @@ class StandardIdentityTests(unittest.TestCase):
             ["A29A29M", "A29"],
         )
         self.assertEqual(identity_fulltext_terms("9001"), ["9001"])
+        part_patterns = identity_indexable_like_patterns("BIS", "60079PART30")
+        self.assertIn("IS/IEC 60079 : Part 30%", part_patterns)
+        self.assertIn("IS/IEC/IEEE 60079 : Part 30%", part_patterns)
+        self.assertIn("IS/IEC 60079-30-%", part_patterns)
+        self.assertIn("IS/IEC 60079-30%", part_patterns)
+        single_part = identity_indexable_like_patterns("BIS", "60079PART28")
+        self.assertIn("IS/IEC 60079 : Part 28%", single_part)
+        self.assertIn("IS/IEC 60079-28%", single_part)
+        self.assertTrue(
+            all(like_pattern_is_prefix_indexable(pattern) for pattern in part_patterns)
+        )
 
     def test_skip_master_identity_keeps_display_lookups_only(self):
         service = DocumentSearchService.__new__(DocumentSearchService)
@@ -1607,6 +1666,178 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertEqual(bis["core_number"], "60079")
         self.assertEqual(bis["qualifier"], "PART:2")
         self.assertFalse(identity_matches(bis, iec))
+
+    def test_spaced_part_section_matches_hyphenated_catalogue_form(self):
+        requested = parse_identity("BIS", "IS IEC 60079 30-1")
+        hyphenated = parse_identity("BIS", "IS/IEC 60079-30-1:2007")
+        explicit = parse_identity("BIS", "IS/IEC 60079 PART 30 SECTION 1")
+
+        self.assertEqual(requested["core_number"], "60079PART30")
+        self.assertEqual(requested["qualifier"], "SECTION:1")
+        self.assertEqual(hyphenated["core_number"], "60079PART30")
+        self.assertEqual(hyphenated["qualifier"], "SECTION:1")
+        self.assertTrue(identity_matches(requested, hyphenated, check_year=False))
+        self.assertTrue(identity_matches(requested, explicit, check_year=False))
+        self.assertTrue(
+            identity_matches(
+                requested,
+                parse_identity(
+                    "BIS",
+                    "IS/IEC/IEEE 60079 : Part 30 : Sec 1 : 2015",
+                ),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                requested,
+                parse_identity(
+                    "BIS",
+                    "IS/IEC/IEEE 60079 : Part 30 : Sec 2 : 2015",
+                ),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                requested,
+                parse_identity("BIS", "IS/IEC 60079-30-2"),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                requested,
+                parse_identity("BIS", "IS/IEC 60079-3-1"),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                requested,
+                parse_identity("BIS", "IS/IEC 60079-30"),
+                check_year=False,
+            )
+        )
+        self.assertFalse(
+            identity_matches(
+                requested,
+                parse_identity("IEC", "IEC 60079-30-1"),
+                check_year=False,
+            )
+        )
+
+    def test_newer_joint_adoption_beats_older_is_iec_edition(self):
+        row = {
+            "sdo_name": "BIS",
+            "search_sdo_name": "BIS",
+            "requested_sdo_name": "BIS",
+            "identity": parse_identity("BIS", "IS IEC 60079 30-1"),
+        }
+        older = SimpleNamespace(
+            id=1,
+            sdo_id=21,
+            status_id=17,
+            standardno="IS/IEC 60079 : Part 30 : Sec 1",
+            display_stdNo="IS/IEC 60079 : Part 30 : Sec 1 : 2007",
+            standardyear=2007,
+            recent=0,
+        )
+        newer = SimpleNamespace(
+            id=2,
+            sdo_id=21,
+            status_id=1,
+            standardno="IS/IEC/IEEE 60079 : Part 30 : Sec 1",
+            display_stdNo="IS/IEC/IEEE 60079 : Part 30 : Sec 1 : 2015",
+            standardyear=2015,
+            recent=0,
+        )
+        with use_candidate_status_map({
+            17: {"name": "Reaffirmed", "cart_show": 1, "std_show": 1},
+            1: {"name": "ACTIVE", "cart_show": 1, "std_show": 1},
+        }):
+            selected = DocumentSearchService._select_master_candidate(
+                [older, newer],
+                row,
+            )
+        self.assertIs(selected, newer)
+
+    def test_older_part_year_matches_the_latest_catalogue_edition(self):
+        from app.utils.standard_identity import identity_core_appears
+
+        requested = parse_identity("BIS", "IS IEC 60079 28 2006")
+        current = parse_identity("BIS", "IS/IEC 60079 : Part 28 : 2023")
+        hyphenated = parse_identity("BIS", "IS/IEC 60079-28:2023")
+        other_part = parse_identity("BIS", "IS/IEC 60079 : Part 29 : 2023")
+        section = parse_identity("BIS", "IS/IEC 60079 : Part 28 : Sec 1 : 2023")
+
+        self.assertEqual(requested["core_number"], "60079")
+        self.assertEqual(requested["qualifier"], "PART:28")
+        self.assertEqual(requested["year"], 2006)
+        self.assertTrue(identity_matches(requested, current, check_year=False))
+        self.assertTrue(identity_matches(requested, hyphenated, check_year=False))
+        self.assertFalse(identity_matches(requested, other_part, check_year=False))
+        self.assertFalse(identity_matches(requested, section, check_year=False))
+        self.assertTrue(
+            identity_core_appears(
+                "IS/IEC 60079-28:2023",
+                "60079PART28",
+            )
+        )
+        self.assertTrue(
+            identity_core_appears(
+                "IS/IEC 60079 : Part 28 : 2023",
+                "60079PART28",
+            )
+        )
+        self.assertFalse(
+            identity_core_appears(
+                "IS/IEC 60079-280:2023",
+                "60079PART28",
+            )
+        )
+        self.assertIn(
+            "60079 PART 28",
+            identity_lookup_core_tokens(
+                "BIS",
+                requested["core_number"],
+                requested["qualifier"],
+            ),
+        )
+
+        row = {
+            "sdo_name": "BIS",
+            "search_sdo_name": "BIS",
+            "requested_sdo_name": "BIS",
+            "identity": requested,
+        }
+        older = SimpleNamespace(
+            id=1,
+            sdo_id=21,
+            status_id=17,
+            standardno="IS/IEC 60079 : Part 28",
+            display_stdNo="IS/IEC 60079 : Part 28 : 2006",
+            standardyear=2006,
+            recent=0,
+        )
+        latest = SimpleNamespace(
+            id=2,
+            sdo_id=21,
+            status_id=1,
+            standardno="IS/IEC 60079 : Part 28",
+            display_stdNo="IS/IEC 60079 : Part 28 : 2023",
+            standardyear=2023,
+            recent=1,
+        )
+        with use_candidate_status_map({
+            17: {"name": "Reaffirmed", "cart_show": 1, "std_show": 1},
+            1: {"name": "ACTIVE", "cart_show": 1, "std_show": 1},
+        }):
+            selected = DocumentSearchService._select_master_candidate(
+                [older, latest],
+                row,
+            )
+        self.assertIs(selected, latest)
 
     def test_bis_standard_designations_are_displayed_as_is(self):
         standard = {

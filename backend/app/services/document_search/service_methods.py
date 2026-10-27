@@ -380,6 +380,10 @@ class DocumentSearchServiceMethods:
         return candidate_filtering._candidate_is_amendment(candidate)
 
     @staticmethod
+    def _candidate_is_draft_stage(candidate):
+        return candidate_filtering._candidate_is_draft_stage(candidate)
+
+    @staticmethod
     def _candidate_is_proposal(candidate):
         return candidate_filtering._candidate_is_proposal(candidate)
 
@@ -820,10 +824,6 @@ class DocumentSearchServiceMethods:
 
     @staticmethod
     def _candidate_catalog_visibility(candidate, status_map):
-        if hasattr(candidate, "DocumentAvailability") and (
-            getattr(candidate, "DocumentAvailability", None) != 1
-        ):
-            return False
         embedded_status = (
             DocumentSearchService._candidate_embedded_lifecycle_status(
                 candidate
@@ -965,6 +965,12 @@ class DocumentSearchServiceMethods:
                 or candidate_status_info.get("name")
                 or ""
             )
+            if DocumentSearchService._candidate_catalog_visibility(
+                candidate,
+                status_map,
+            ) is True:
+                filtered.append(candidate)
+                continue
             if DocumentSearchService._status_label_is_unavailable(
                 candidate_lifecycle_status
             ):
@@ -1054,9 +1060,8 @@ class DocumentSearchServiceMethods:
 
     @staticmethod
     def _master_result_status(status_info, standard):
-        """Require database document availability and website visibility."""
-        if getattr(standard, "DocumentAvailability", None) != 1:
-            return "DOCUMENT UNAVAILABLE", False
+        """A current catalogue row is found. Withdrawn and historical are not."""
+        del standard
         if not status_info:
             return "STATUS UNKNOWN", False
 
