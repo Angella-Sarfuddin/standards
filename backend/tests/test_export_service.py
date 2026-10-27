@@ -112,6 +112,8 @@ class ExportServiceTests(unittest.TestCase):
         self.assertNotIn("Status", headers)
         self.assertEqual(row["Standard Year"], 2024)
         self.assertEqual(row["Currency"], "USD")
+        self.assertEqual(row["Price"], 125.5)
+        self.assertEqual(headers[-1], "TC")
         self.assertEqual(row["Matched Standard"], "API STD 610 : 2021")
         self.assertIsNone(row["TC"])
         self.assertLess(
@@ -123,7 +125,7 @@ class ExportServiceTests(unittest.TestCase):
         self.assertGreaterEqual(worksheet.column_dimensions["D"].width, 48)
         workbook.close()
 
-    def test_tc_column_uses_committee_identifier_and_bis_code(self):
+    def test_tc_column_uses_classification_description(self):
         output = ExportService.export_results(
             {
                 "results": [
@@ -161,9 +163,10 @@ class ExportServiceTests(unittest.TestCase):
         headers = [cell.value for cell in worksheet[1]]
         tc_cell = worksheet.cell(2, headers.index("TC") + 1)
 
+        self.assertEqual(headers[-1], "TC")
         self.assertEqual(
             tc_cell.value,
-            "TC 8, ISO/TC 108/SC 2, PGD 1",
+            "Refining, TC 8, ISO/TC 108/SC 2., PGD 1 -- BASIC STANDARDS",
         )
         self.assertTrue(tc_cell.alignment.wrap_text)
         self.assertGreaterEqual(
