@@ -345,18 +345,32 @@ def identity_lookup_core_tokens(
     if not core:
         return []
 
-    tokens = [core]
-    if (
-        normalize_tokens(sdo_name) == "IEC"
-        and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
-    ):
-        tokens.append(f"60{core}")
-    # "60079 28" is stored as "60079 : Part 28" or "60079-28". The bare
-    # core 60079 does not find either spelling.
-    part = re.fullmatch(r"PART:(\d+)", str(qualifier or "").upper())
+    qualifier_text = str(qualifier or "").upper()
+    part = re.fullmatch(r"PART:(\d+)", qualifier_text)
+    section = re.fullmatch(r"SECTION:(\d+)", qualifier_text)
     root = normalize_identity_core(core)
-    if part and re.fullmatch(r"\d{4,}", root):
+    numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", root)
+    tokens = []
+    # A part or section request must not search the bare root. "60079%"
+    # returns every part of that standard.
+    if section and numbered:
+        tokens.append(
+            f"{numbered.group('root')} PART {int(numbered.group('part'))} "
+            f"SECTION {int(section.group(1))}"
+        )
+    elif part and re.fullmatch(r"\d{4,}", root):
         tokens.append(f"{root} PART {int(part.group(1))}")
+    elif numbered:
+        tokens.append(
+            f"{numbered.group('root')} PART {int(numbered.group('part'))}"
+        )
+    else:
+        tokens.append(core)
+        if (
+            normalize_tokens(sdo_name) == "IEC"
+            and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
+        ):
+            tokens.append(f"60{core}")
     return list(dict.fromkeys(tokens))
 
 
@@ -525,37 +539,90 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
     if not compact or not prefix or len(compact) < _MIN_CONTAINMENT_CORE_LEN:
         return []
 
-    patterns = [
-        f"{prefix} {compact}%",
-        f"{prefix}{compact}%",
-    ]
-    glued = normalize_identity_core(prefix)
-    compact_prefix = prefix.replace(" ", "")
-    if glued and glued not in {prefix, compact_prefix}:
-        patterns.append(f"{glued}{compact}%")
-    if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
-        patterns.append(f"{compact}%")
-    # A part identity is stored under whatever publisher prefix the
-    # catalogue uses, and the part itself may be a hyphen, a space, or
-    # the words Part and Sec. Anchor on the numeric root so later
-    # punctuation does not have to be listed.
-    numbered_part = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", compact)
-    if numbered_part:
+    numbered_part = re.fullmatch(
+        r"(?P<root>\d+)PART(?P<part>\d+)(?:SECTION(?P<section>\d+))?",
+        compact,
+    )
+    patterns = []
+    if not numbered_part:
+        patterns.extend([
+            f"{prefix} {compact}%",
+            f"{prefix}{compact}%",
+        ])
+        glued = normalize_identity_core(prefix)
+        compact_prefix = prefix.replace(" ", "")
+        if glued and glued not in {prefix, compact_prefix}:
+            patterns.append(f"{glued}{compact}%")
+        if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
+            patterns.append(f"{compact}%")
+    else:
+        # One family prefix per spelling. A long root such as 60079 is a
+        # small index range; the part and section are checked afterwards.
+        # Listing every Part/Sec spelling here multiplies the ranges until
+        # the query stops using the index. Short roots stay specific so
+        # "IS 5%" is never searched.
         root = numbered_part.group("root")
         part = str(int(numbered_part.group("part")))
+        section = numbered_part.group("section")
         for spelling in sdo_identifier_prefixes(prefix):
-            patterns.extend([
-                f"{spelling} {root}%",
-                f"{spelling}{root}%",
-                f"{spelling} {root}-{part}%",
-                f"{spelling} {root}-{part}-%",
-                f"{spelling} {root} {part}%",
-                f"{spelling} {root} {part}-%",
-                f"{spelling} {root} : Part {part}%",
-                f"{spelling} {root} : PART {part}%",
-                f"{spelling} {root} PART {part}%",
-                f"{spelling} {root} (Part {part})%",
-            ])
+            if len(root) >= 4:
+                patterns.append(f"{spelling} {root}%")
+                continue
+            if section:
+                sec = str(int(section))
+                patterns.extend([
+                    f"{spelling} {root}-{part}-{sec}%",
+                    f"{spelling} {root} : Part {part} : Sec {sec}%",
+                    f"{spelling} {root} PART {part} SECTION {sec}%",
+                ])
+            else:
+                patterns.extend([
+                    f"{spelling} {root}-{part}%",
+                    f"{spelling} {root} : Part {part}%",
+                    f"{spelling} {root} {part}%",
+                    f"{spelling} {root} PART {part}%",
+                    f"{spelling} {root} (Part {part})%",
+                ])
+    return [
+        pattern
+        for pattern in dict.fromkeys(patterns)
+        if like_pattern_is_prefix_indexable(pattern)
+    ]
+
+
+def adoption_price_like_patterns(
+    sdo_name: str,
+    core_number: str,
+    qualifier: str = None,
+) -> List[str]:
+    """Indexable patterns for the one edition a BIS adoption names.
+
+    Search can read a whole family and pick the part afterwards. Price
+    lookup must not: ``IEC 60079%`` returns every part, amendment, and
+    redline. These patterns keep the part and, when present, the section.
+    """
+    compact = normalize_identity_core(core_number)
+    section = re.fullmatch(r"SECTION:(\d+)", str(qualifier or "").upper())
+    numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", compact)
+    patterns = []
+    if numbered:
+        root = numbered.group("root")
+        part = str(int(numbered.group("part")))
+        for spelling in sdo_identifier_prefixes(sdo_name):
+            if section:
+                sec = str(int(section.group(1)))
+                patterns.extend([
+                    f"{spelling} {root}-{part}-{sec}%",
+                    f"{spelling} {root} : Part {part} : Sec {sec}%",
+                ])
+            else:
+                patterns.extend([
+                    f"{spelling} {root}-{part}%",
+                    f"{spelling} {root} : Part {part}%",
+                ])
+    else:
+        for prefix in sdo_identifier_prefixes(sdo_name):
+            patterns.extend(identity_indexable_like_patterns(prefix, compact))
     return [
         pattern
         for pattern in dict.fromkeys(patterns)
@@ -576,9 +643,6 @@ def identity_fulltext_terms(core: str) -> List[str]:
     head = re.match(r"[A-Z]+\d+", compact)
     if head and head.group(0) != compact and len(head.group(0)) >= 3:
         terms.append(head.group(0))
-    numbered_part = re.fullmatch(r"(?P<root>\d{3,})PART\d+", compact)
-    if numbered_part:
-        terms.append(numbered_part.group("root"))
     return list(dict.fromkeys(terms))
 
 
@@ -589,6 +653,22 @@ def like_pattern_is_prefix_indexable(pattern: str) -> bool:
     if wildcard_at < 0:
         return True
     return text[wildcard_at:].replace("%", "") == ""
+
+
+def _catalogue_section_appears(value: str, root: str, part: str, section: str) -> bool:
+    """True when a compact designation is this part and section.
+
+    ``60079-35-2:2011`` compacts to ``600793522011``. Part 35 alone, or
+    section 1, does not satisfy section 2.
+    """
+    return bool(
+        re.search(
+            rf"(?<!\d){re.escape(root)}(?:PART)?{re.escape(part)}"
+            rf"(?:SEC(?:TION)?)?{re.escape(section)}"
+            rf"(?:(?:19|20)\d{{2}})?(?!\d)",
+            value,
+        )
+    )
 
 
 def _catalogue_part_appears(value: str, root: str, part: str) -> bool:
@@ -623,6 +703,18 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
     core = re.sub(r"(?<=\d)(?:19|20)\d{2}(?=[A-Z])", "", core)
     if not value or not core:
         return False
+
+    section_form = re.fullmatch(
+        r"(?P<root>\d+)PART(?P<part>\d+)SECTION(?P<section>\d+)",
+        core,
+    )
+    if section_form and _catalogue_section_appears(
+        value,
+        section_form.group("root"),
+        section_form.group("part"),
+        section_form.group("section"),
+    ):
+        return True
 
     part_form = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", core)
     if part_form and _catalogue_part_appears(

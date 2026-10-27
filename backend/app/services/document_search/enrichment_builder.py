@@ -13,6 +13,20 @@ _AMENDMENT_DESIGNATION = re.compile(
     r"(?i)(?:\+|/|\s)\s*"
     r"(?:AMD\.?|AMEND(?:MENT)?\.?|AMENDMENT)\s*[-.:#]?\s*\d+"
 )
+_VARIANT_COPY_RE = re.compile(
+    r"(?i)(?:^|[^A-Z0-9])"
+    r"(?:CMV|RLV|REDLINE|CSV|AMD\d*|AMEND(?:MENT)?|CORR(?:IGENDUM)?|COR\d*)"
+    r"(?:[^A-Z0-9]|$)"
+)
+
+
+def _is_variant_copy(master):
+    """Commented, redline, amendment, and consolidated copies are not the base edition."""
+    text = " ".join(
+        str(getattr(master, field, "") or "")
+        for field in ("display_stdNo", "standardno")
+    )
+    return bool(_VARIANT_COPY_RE.search(text))
 
 
 def _preferred_price_format(entries, sdo_name):
@@ -447,10 +461,7 @@ def build_enrichment_map(
         base_entries = [
             item
             for item in matching_entries
-            if not re.search(
-                r"(?i)(?:^|[\s/(])CMV(?:[\s)/]|$)",
-                f"{item[0].display_stdNo or ''} {item[0].standardno or ''}",
-            )
+            if not _is_variant_copy(item[0])
         ]
         if base_entries:
             matching_entries = base_entries
@@ -464,27 +475,37 @@ def build_enrichment_map(
             for master, entry in matching_entries
             if int(entry[0] or 0) == best_format
         ]
+        if not best_entries:
+            continue
         distinct_prices = {entry[2] for _master, entry in best_entries}
         if len(distinct_prices) != 1:
-            continue
-        # Multiple catalogue rows for a language/format variant may be
-        # used only when their SDO currency also agrees.
+            # Keep the plain base row when redline or consolidated copies
+            # were already removed and the remaining base rows still differ.
+            best_entries = [min(
+                best_entries,
+                key=lambda item: (
+                    0 if getattr(item[0], "DocumentAvailability", None) == 1 else 1,
+                    len(
+                        f"{item[0].display_stdNo or ''} "
+                        f"{item[0].standardno or ''}"
+                    ),
+                    item[0].id or 0,
+                ),
+            )]
         source_currencies = {
             (currency_map.get(master.sdo_id) or {}).get("code")
             for master, _entry in best_entries
         }
         if len(source_currencies) != 1:
-            continue
+            chosen = best_entries[0][0]
+            source_currencies = {
+                (currency_map.get(chosen.sdo_id) or {}).get("code")
+            }
+            best_entries = [best_entries[0]]
         resolved_international_prices[identity] = (
-            next(iter(distinct_prices)),
+            best_entries[0][1][2],
             next(iter(source_currencies)),
-            next(
-                (
-                    (currency_map.get(master.sdo_id) or {}).get("symbol")
-                    for master, _entry in best_entries
-                ),
-                None,
-            ),
+            (currency_map.get(best_entries[0][0].sdo_id) or {}).get("symbol"),
         )
 
     international_price_by_standard = {}
@@ -495,17 +516,13 @@ def build_enrichment_map(
         references = extract_international_references(
             _designation_text(master, adoption_text_by_standard_id)
         )
-        reference_prices = {
-            resolved_international_prices[reference["identity"]]
-            for reference in references
-            if reference["identity"] in resolved_international_prices
-        }
-        # Only borrow when explicit references resolve unambiguously to
-        # one available, priced database edition and currency.
-        if len(reference_prices) == 1:
-            international_price_by_standard[master.Standard_id] = next(
-                iter(reference_prices)
+        for reference in references:
+            resolved = resolved_international_prices.get(
+                reference["identity"]
             )
+            if resolved:
+                international_price_by_standard[master.Standard_id] = resolved
+                break
 
     price_map = {}
     for master in masters:
