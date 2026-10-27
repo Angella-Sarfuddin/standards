@@ -30,6 +30,53 @@ TRAILING_NOTE_RE = re.compile(
 )
 
 
+STATED_REPLACEMENT_RE = re.compile(
+    r"(?i)^(?P<original>.+?)"
+    r"(?:\s+|\s*[-–—/]\s*|\s*\(\s*)"
+    r"(?:withdrawn|wthdrawn)"
+    r"\)?\s+and\s+replaced(?:\s+by)?\s+"
+    r"(?P<replacement>.+?)\s*$"
+)
+
+
+def split_stated_replacement(value: str) -> Optional[Dict]:
+    """Read "X withdrawn and replaced Y" as a search for Y.
+
+    The status may be separated by a space, hyphen, slash, or parenthesis,
+    as in "6.6-WITHDRAWN and replaced by ...".
+    """
+    match = STATED_REPLACEMENT_RE.match(clean(value))
+    if not match:
+        return None
+    original = match.group("original").strip(" :,-/")
+    replacement = match.group("replacement").strip(" :,-/")
+    if not original or not replacement:
+        return None
+    return {"original": original, "replacement": replacement}
+
+
+def _prepare_printed_designation(display: str) -> str:
+    """Drop title prose and BIS print marks that hide the designation."""
+    display = re.sub(
+        r"(?i)\s*:\s*indian\s+standards?\s*$",
+        "",
+        display,
+    ).strip()
+    display = re.sub(
+        r"(?i)\s*[\(\[]\s*(?:reaffirmed|reaffirmation|reviewed|confirmed)"
+        r"(?:\s+(?:in|year))?\s*[:=\-]?\s*(?:19|20)\d{2}\s*[\)\]]",
+        "",
+        display,
+    ).strip()
+    # BIS prints the edition as "PART 2/-1989".
+    display = re.sub(
+        r"(?i)(?<=\d)\s*/\s*-\s*((?:19|20)\d{2})\b",
+        r" : \1",
+        display,
+    )
+    return display.strip(" :,-/")
+
+
 def reaffirmation_year(value: str) -> Optional[int]:
     """Return a standard's reaffirmation/review year without treating it as edition year."""
     match = REAFFIRMATION_RE.search(clean(value))
@@ -494,13 +541,14 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
     if part_and_section:
         root = part_and_section.group("root")
         part = str(int(part_and_section.group("part")))
-        for spelling in {prefix, "IS/IEC", "IS/IEC/IEEE", "IEC/IEEE"}:
+        for spelling in {prefix, "IS", "IS/IEC", "IS/IEC/IEEE", "IEC/IEEE"}:
             if not spelling:
                 continue
             patterns.extend([
                 f"{spelling} {root} : Part {part}%",
                 f"{spelling} {root} : PART {part}%",
                 f"{spelling} {root} PART {part}%",
+                f"{spelling} {root} (Part {part})%",
                 f"{spelling} {root}-{part}%",
                 f"{spelling} {root}-{part}-%",
                 f"{spelling} {root} {part}%",
@@ -730,6 +778,11 @@ def _prepare_display(display: str) -> str:
     """Collapse wording that is not part of the stored designation."""
     display = display.lstrip("/").strip()
     display = re.sub(
+        r"(?i)\(\s*((?:PART|PT|SECTION|SEC|CHAPTER|CH)\b[^)]*)\)",
+        r"\1",
+        display,
+    )
+    display = re.sub(
         r"(?i)\s*\((?:ISO|IEC)\s+\d[^)]*\)\s*$",
         "",
         display,
@@ -802,7 +855,10 @@ def canonicalize_search_request(
     the number so withdrawn / edition text does not hide the designation.
     """
     sdo = clean(sdo_name).upper()
-    display = clean(display_number)
+    display = _prepare_printed_designation(clean(display_number))
+    stated_replacement = split_stated_replacement(display)
+    if stated_replacement:
+        display = stated_replacement["replacement"]
     if (
         sdo in {"ANSI/HI", "ANSI HI"}
         or (

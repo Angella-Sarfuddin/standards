@@ -11,7 +11,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { EMPTY } from "../../constants.js";
-import { displayValue, getResultKey } from "../../utils/standards.js";
+import { displayValue, formatTechnicalCommittee, getResultKey } from "../../utils/standards.js";
 
 function statusClass(status) {
   if (status === "AVAILABLE") {
@@ -36,7 +36,7 @@ export default function ResultsTable({
     <div className="min-w-0 rounded-xl border border-border/70 bg-card">
       <Table
         containerClassName="max-h-[min(36rem,64vh)]"
-        className="min-w-[990px] table-fixed"
+        className="min-w-[1140px] table-fixed"
       >
         <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:h-11 [&_th]:border-b [&_th]:border-border [&_th]:bg-muted [&_th]:text-[11px] [&_th]:font-semibold [&_th]:tracking-wide [&_th]:text-muted-foreground">
           <TableRow>
@@ -52,6 +52,7 @@ export default function ResultsTable({
             <TableHead className="w-40">Requested</TableHead>
             <TableHead className="w-[170px]">Matched</TableHead>
             <TableHead className="w-[230px]">Title</TableHead>
+            <TableHead className="w-[160px]">TC</TableHead>
             <TableHead className="w-[140px]">Status</TableHead>
             <TableHead className="w-[150px]">Action</TableHead>
           </TableRow>
@@ -96,6 +97,9 @@ export default function ResultsTable({
                   title={result.standard?.title || ""}
                 >
                   {displayValue(result.standard?.title)}
+                </TableCell>
+                <TableCell className="whitespace-normal break-words align-top leading-5 text-muted-foreground">
+                  {displayValue(formatTechnicalCommittee(result))}
                 </TableCell>
                 <TableCell>
                   <Badge className={`h-6 rounded-full px-2.5 text-[11px] font-semibold ${statusClass(result.status)}`}>
