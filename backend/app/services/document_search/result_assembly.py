@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 from app.services.document_search.selection_context import use_candidate_status_map
 
-from app.services.ieee_official_metadata import IEEEOfficialMetadataService
 from app.core.standard_identity import (
     normalize_identity_core,
     normalize_tokens,
@@ -71,25 +70,6 @@ def assemble_results(
         hi_replacement = service._official_hi_replacement(row)
         if hi_replacement is not None:
             matched_candidates.append(hi_replacement)
-
-    ieee_replacements = {}
-    for row in unique_prepared_rows.values():
-        ieee_metadata = IEEEOfficialMetadataService.lookup(
-            row.get("search_sdo_name") or row.get("sdo_name"),
-            row.get("result_displaystdno") or row.get("displaystdno"),
-        )
-        if ieee_metadata is None:
-            continue
-        replacement = service._official_ieee_replacement(
-            row,
-            ieee_metadata,
-        )
-        ieee_replacements[row["request_key"]] = (
-            ieee_metadata,
-            replacement,
-        )
-        if replacement is not None:
-            matched_candidates.append(replacement)
 
     for standard in matched_candidates:
 
@@ -309,18 +289,6 @@ def assemble_results(
             if family_members and requested_family != "SERIES":
                 request_candidates = family_members
 
-        ieee_resolution = ieee_replacements.get(key)
-        if ieee_resolution is not None:
-            ieee_metadata, ieee_replacement = ieee_resolution
-            # IEEE's legacy records are incorrectly marked ACTIVE in the
-            # mirror. Use the official successor's real catalogue row so
-            # year, price, title, and committee all belong to that edition.
-            request_candidates = (
-                [ieee_replacement]
-                if ieee_replacement is not None
-                else []
-            )
-
         standards_by_id = {}
         for standard in request_candidates:
             standard_id = standard.Standard_id or standard.id
@@ -467,17 +435,8 @@ def assemble_results(
                         "Requested TEMA edition is superseded; "
                         f"latest available edition is {actual_year}."
                     )
-                ieee_relationship_type = (
-                    getattr(ieee_resolution[0], "relationship_type", None)
-                    if ieee_resolution is not None
-                    else None
-                )
                 has_explicit_replacement = bool(
                     hi_replacement is not None
-                    or (
-                        ieee_resolution is not None
-                        and ieee_resolution[1] is not None
-                    )
                     or requested_tema_is_historical
                 )
                 if (
@@ -489,17 +448,9 @@ def assemble_results(
                     and int(requested_year) != int(actual_year)
                 ):
                     status_detail = (
-                        (
-                            f"Requested edition {requested_year} was "
-                            "incorporated into the current consolidated "
-                            f"edition {actual_year}."
-                        )
-                        if ieee_relationship_type == "INCORPORATED_INTO"
-                        else (
-                            f"Requested edition {requested_year} is "
-                            "superseded; latest available edition is "
-                            f"{actual_year}."
-                        )
+                        f"Requested edition {requested_year} is "
+                        "superseded; latest available edition is "
+                        f"{actual_year}."
                     )
                 current_designation = str(
                     data.get("display_stdNo")
@@ -659,7 +610,6 @@ def assemble_results(
                         if (
                             is_match
                             and has_explicit_replacement
-                            and ieee_relationship_type != "INCORPORATED_INTO"
                         )
                         else (
                             service._bis_superseded_by_note(status_detail)
@@ -687,10 +637,6 @@ def assemble_results(
         # NOT FOUND
         # ----------------------------------------------------
 
-        ieee_resolution = ieee_replacements.get(key)
-        ieee_metadata = (
-            ieee_resolution[0] if ieee_resolution else None
-        )
         requested_edition_status = str(
             row.get("requested_edition_status") or ""
         ).strip().upper()
@@ -703,28 +649,7 @@ def assemble_results(
             )
             else None
         )
-        if ieee_metadata:
-            ieee_relationship_type = getattr(
-                ieee_metadata,
-                "relationship_type",
-                "SUPERSEDED_BY",
-            )
-            if ieee_relationship_type == "INCORPORATED_INTO":
-                not_found_detail = (
-                    "IEEE SA lists this amendment edition as superseded and "
-                    "incorporated into the IEEE 802.1Q consolidated family; "
-                    f"the current consolidated edition is "
-                    f"{ieee_metadata.replacement_designation}, but that "
-                    "edition is not available in the local catalogue."
-                )
-            else:
-                not_found_detail = (
-                    "IEEE SA lists this edition as superseded; current "
-                    f"successor is {ieee_metadata.replacement_designation}, "
-                    "but that successor is not available in the local "
-                    "catalogue."
-                )
-        elif unavailable_edition_status:
+        if unavailable_edition_status:
             not_found_detail = (
                 f"Requested edition is marked "
                 f"{unavailable_edition_status} in the catalogue "
@@ -746,22 +671,8 @@ def assemble_results(
                 or "NOT FOUND"
             ),
             "status_detail": not_found_detail,
-            "replacement_standard": (
-                ieee_metadata.replacement_designation
-                if ieee_metadata
-                else row.get("stated_replacement")
-            ),
-            "superseded_by": (
-                ieee_metadata.replacement_designation
-                if ieee_metadata
-                and getattr(
-                    ieee_metadata,
-                    "relationship_type",
-                    "SUPERSEDED_BY",
-                )
-                != "INCORPORATED_INTO"
-                else None
-            ),
+            "replacement_standard": row.get("stated_replacement"),
+            "superseded_by": None,
             "standard": None,
             "actions": {"manual_search": True},
             "_source_request_identity": row.get(

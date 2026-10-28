@@ -6,9 +6,9 @@ from app.services.document_search_service import DocumentSearchService
 from app.services.document_search.selection_context import use_candidate_status_map
 from app.services.document_service import DocumentService
 from app.services.extractors.excel_extractor import ExcelExtractor
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_formatter import build_full_display_number
-from app.utils.standard_identity import (
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_formatter import build_full_display_number
+from app.core.standard_identity import (
     canonicalize_search_request,
     identity_bound_like_patterns,
     identity_core_appears,
@@ -763,7 +763,7 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_identity_like_patterns_helper_matches_bound_and_unprefixed(self):
-        from app.utils.standard_identity import (
+        from app.core.standard_identity import (
             identity_like_patterns_for_hint,
             like_pattern_is_prefix_indexable,
         )
@@ -778,7 +778,7 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertFalse(like_pattern_is_prefix_indexable("60909%0"))
 
     def test_identity_discovery_terms_uses_containment_for_long_cores(self):
-        from app.utils.standard_identity import identity_discovery_terms
+        from app.core.standard_identity import identity_discovery_terms
 
         core, containment, bound = identity_discovery_terms("API", "610")
         self.assertEqual(core, "610")
@@ -795,7 +795,7 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertIn("API 12", short_bound)
 
     def test_indexable_identity_patterns_keep_a_left_prefix(self):
-        from app.utils.standard_identity import (
+        from app.core.standard_identity import (
             identity_fulltext_terms,
             identity_indexable_like_patterns,
             like_pattern_is_prefix_indexable,
@@ -1825,7 +1825,7 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertIs(selected, newer)
 
     def test_older_part_year_matches_the_latest_catalogue_edition(self):
-        from app.utils.standard_identity import identity_core_appears
+        from app.core.standard_identity import identity_core_appears
 
         requested = parse_identity("BIS", "IS IEC 60079 28 2006")
         current = parse_identity("BIS", "IS/IEC 60079 : Part 28 : 2023")
@@ -1934,7 +1934,7 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_withdrawn_and_replaced_sentence_searches_the_replacement(self):
-        from app.utils.standard_identity import split_stated_replacement
+        from app.core.standard_identity import split_stated_replacement
 
         sentence = (
             "API MPMS Ch. 6.2 Withdrawn and replaced "
@@ -1972,7 +1972,7 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_bis_adoption_of_any_publisher_is_priced_and_plain_is_is_not(self):
-        from app.utils.standard_identity import (
+        from app.core.standard_identity import (
             bis_names_another_standard,
             extract_international_references,
         )

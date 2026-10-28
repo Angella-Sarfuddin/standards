@@ -11,7 +11,6 @@ import time
 from app.repositories.standards_repository import StandardsRepository
 from app.repositories.enrichment_repository import EnrichmentRepository
 from app.services.search_service import SearchService
-from app.services.ieee_official_metadata import IEEEOfficialMetadataService
 from app.services.document_search import candidate_resolution
 from app.services.document_search import candidate_filtering
 from app.services.document_search import family_paths
@@ -309,33 +308,6 @@ class DocumentSearchServiceMethods:
                 break
 
         cache[sdo_id] = selected
-        return selected
-
-    def _official_ieee_replacement(self, row, metadata=None):
-        """Return the active catalogue row for a verified IEEE target."""
-        metadata = metadata or IEEEOfficialMetadataService.lookup(
-            row.get("search_sdo_name") or row.get("sdo_name"),
-            row.get("result_displaystdno") or row.get("displaystdno"),
-        )
-        if metadata is None or not row.get("sdo_id"):
-            return None
-
-        key = (
-            row["sdo_id"],
-            metadata.replacement_standardno,
-            metadata.replacement_year,
-        )
-        cache = self._memo("ieee_replacement")
-        if key in cache:
-            return cache[key]
-
-        candidates = self.enrichment_repository.find_visible_ieee_replacement(
-            row["sdo_id"],
-            metadata.replacement_standardno,
-            metadata.replacement_year,
-        )
-        selected = candidates[0] if candidates else None
-        cache[key] = selected
         return selected
 
     @staticmethod

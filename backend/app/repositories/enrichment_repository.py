@@ -165,20 +165,6 @@ class EnrichmentRepository:
             .all()
         )
 
-    def find_visible_ieee_replacement(self, sdo_id, standardno, year):
-        """Visible IEEE replacement rows for one publisher, number, and year."""
-        return (
-            self.db.query(StandardMaster)
-            .filter(
-                StandardMaster.sdo_id == sdo_id,
-                StandardMaster.standardno == standardno,
-                StandardMaster.standardyear == year,
-                StandardMaster.status == 1,
-            )
-            .order_by(StandardMaster.id.asc())
-            .all()
-        )
-
     def get_latest_tema_edition(self, sdo_id):
         """Return the newest visible TEMA numbered edition in the catalogue."""
         if not sdo_id:
