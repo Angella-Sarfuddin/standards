@@ -20,6 +20,25 @@ _VARIANT_COPY_RE = re.compile(
 )
 
 
+def _catalogue_price_sdo(catalogue_sdo, designation):
+    """Use a slash chain printed on the row when pricing that chain.
+
+    ``IEC/IEEE 60079-30-1:2015`` is stored under IEC. Pricing it as plain
+    IEC drops the IEEE publisher and no longer matches the BIS adoption.
+    """
+    leading = re.match(
+        r"(?i)^(?P<chain>[A-Z][A-Z0-9]*(?:\s*/\s*[A-Z][A-Z0-9]*)+)",
+        str(designation or "").strip(),
+    )
+    catalogue = str(catalogue_sdo or "").strip().upper()
+    if not leading:
+        return catalogue
+    chain = re.sub(r"\s*/\s*", "/", leading.group("chain").upper())
+    if catalogue and catalogue in chain.split("/"):
+        return chain
+    return catalogue
+
+
 def _is_variant_copy(master):
     """Commented, redline, amendment, and consolidated copies are not the base edition."""
     text = " ".join(
@@ -207,25 +226,9 @@ def build_enrichment_map(
     )
     for alias in api_price_aliases:
         masters_by_id.setdefault(alias.id, alias)
-    international_alias_lookup = getattr(
-        enrichment_repository,
-        "get_international_equivalent_price_aliases",
-        None,
-    )
-    adoption_designations = [
-        text
-        for texts in (adoption_text_by_standard_id or {}).values()
-        for text in texts
-    ]
-    international_price_aliases = (
-        international_alias_lookup(
-            master_ids=bis_master_ids,
-            extra_designations=adoption_designations,
-        )
-        if callable(international_alias_lookup)
-        and bis_master_ids
-        else []
-    )
+    # Combined BIS standards use the rupee price stored on the BIS row.
+    # Do not load the ISO or IEC catalogue named in the designation.
+    international_price_aliases = []
     for alias in international_price_aliases:
         masters_by_id.setdefault(alias.id, alias)
 
@@ -320,9 +323,14 @@ def build_enrichment_map(
             or master.standardyear
             or standard_number_year(master.display_stdNo or master.standardno or "")
         )
+        core_number = re.sub(
+            r"(?<=\d)PT(?=\d)",
+            "PART",
+            str(identity.get("core_number") or ""),
+        )
         return (
             master.sdo_id,
-            identity.get("core_number"),
+            core_number,
             identity.get("qualifier"),
             year,
         )
@@ -422,12 +430,16 @@ def build_enrichment_map(
     # product, so the base edition supplies the price when both exist.
     international_prices_by_identity = {}
     for master in international_price_aliases:
-        sdo_name = str(sdo_title_map.get(master.sdo_id) or "").strip()
+        designation = price_identity_designation(
+            master.display_stdNo or master.standardno or ""
+        )
+        sdo_name = _catalogue_price_sdo(
+            sdo_title_map.get(master.sdo_id),
+            designation,
+        )
         identity = parse_identity(
             sdo_name,
-            price_identity_designation(
-                master.display_stdNo or master.standardno or ""
-            ),
+            designation,
         )
         year = (
             identity.get("year")
@@ -524,6 +536,20 @@ def build_enrichment_map(
                 international_price_by_standard[master.Standard_id] = resolved
                 break
 
+    bis_india_price_by_part = {}
+    for priced_master in masters_by_id.values():
+        if str(sdo_title_map.get(priced_master.sdo_id) or "").strip().upper() != "BIS":
+            continue
+        amount = direct_price_by_master.get(priced_master.id)
+        if amount in (None, 0):
+            continue
+        priced_identity = price_identity(priced_master)
+        part_key = priced_identity[:3]
+        year = priced_identity[3] or 0
+        current = bis_india_price_by_part.get(part_key)
+        if current is None or year >= current[0]:
+            bis_india_price_by_part[part_key] = (year, amount)
+
     price_map = {}
     for master in masters:
         identity = price_identity(master)
@@ -534,16 +560,9 @@ def build_enrichment_map(
             master,
             adoption_text_by_standard_id,
         )
-        names_another_standard = bis_names_another_standard(designation)
-        is_simple_is_edition = (
-            sdo_name == "BIS"
-            and re.match(r"(?i)\s*(?:IS|BIS)\b", designation)
-            and not names_another_standard
-        )
         exact_price = direct_price_by_master.get(master.id)
-        international_price = international_price_by_standard.get(
-            master.Standard_id
-        )
+        names_another_standard = bis_names_another_standard(designation)
+        india_price = bis_india_price_by_part.get(identity[:3])
         has_amendment_designation = bool(
             re.search(
                 r"(?i)(?:\+|/|\s)\s*"
@@ -551,17 +570,19 @@ def build_enrichment_map(
                 designation,
             )
         )
-        if is_simple_is_edition:
-            # Plain IS editions are free in the result. Do not let a
-            # priced BIS/BOSS alias create a charge for them.
+        if sdo_name == "BIS" and not names_another_standard:
+            # A plain IS number has no price. Do not copy another BIS alias.
             value = 0
         elif sdo_name == "BIS" and exact_price not in (None, 0):
-            # For paid BIS/IS adoptions, prefer the exact row's listed
-            # amount; use aliases only when the exact edition has no paid
-            # price recorded.
             value = exact_price
-        elif sdo_name == "BIS" and international_price:
-            value = international_price[0]
+        elif sdo_name == "BIS" and names_another_standard and identity in price_by_identity:
+            value = price_by_identity[identity]
+        elif sdo_name == "BIS" and names_another_standard and india_price:
+            # The adoption row often stores 0. The India price is on the
+            # BIS catalogue row for the same standard, in rupees.
+            value = india_price[1]
+        elif sdo_name == "BIS":
+            value = 0
         elif (
             sdo_name != "BIS"
             and exact_price not in (None, 0)
@@ -783,19 +804,6 @@ def build_enrichment_map(
         else:
             currency_code = currency.get("code")
             currency_symbol = currency.get("symbol")
-        international_price = international_price_by_standard.get(
-            standard.Standard_id
-        )
-        if (
-            sdo_title == "bis"
-            and international_price
-            and price_map.get(standard.Standard_id)
-            == international_price[0]
-            and direct_price_by_master.get(master.id if master else None)
-            in (None, 0)
-        ):
-            currency_code = international_price[1]
-            currency_symbol = international_price[2]
         year = (
             master.standardyear
             if master

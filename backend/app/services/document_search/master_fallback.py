@@ -8,6 +8,7 @@ from app.services.document_search.selection_context import use_candidate_status_
 
 from app.core.standard_identity import (
     identity_lookup_core_tokens,
+    identity_pattern_prefix,
     normalize_identity_core,
     normalize_tokens,
 )
@@ -208,10 +209,14 @@ def find_master_matches(
         search_sdo_name = (
             row.get("search_sdo_name") or row["sdo_name"]
         )
+        pattern_prefix = identity_pattern_prefix(
+            search_sdo_name,
+            row["identity"].get("identifier_prefix"),
+        )
         identity_hints.extend(
             (
                 row["sdo_id"],
-                search_sdo_name,
+                pattern_prefix,
                 lookup_core,
                 None,
             )

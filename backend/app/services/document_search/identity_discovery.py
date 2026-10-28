@@ -4,6 +4,7 @@ from app.core.standard_identity import (
     canonicalize_search_request,
     identity_index_cores,
     identity_lookup_core_tokens,
+    identity_pattern_prefix,
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
@@ -82,10 +83,14 @@ def discover_identity_candidates(identity_lookup_rows, repository):
         search_sdo_name = (
             row.get("search_sdo_name") or row["sdo_name"]
         )
+        pattern_prefix = identity_pattern_prefix(
+            search_sdo_name,
+            identity.get("identifier_prefix"),
+        )
         identity_hints.extend(
             (
                 row["sdo_id"],
-                search_sdo_name,
+                pattern_prefix,
                 lookup_core,
             )
             for lookup_core in identity_lookup_core_tokens(

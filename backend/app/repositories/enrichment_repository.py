@@ -357,10 +357,9 @@ class EnrichmentRepository:
                 continue
 
             bucket = grouped.setdefault(
-                int(sdo_id),
-                {"containment": {}, "bound": {}, "prefixes": set()},
+                (int(sdo_id), sdo_prefix),
+                {"containment": {}, "bound": {}, "prefixes": {sdo_prefix}},
             )
-            bucket["prefixes"].add(sdo_prefix)
             key = (core, year)
 
             if containment:
@@ -375,7 +374,7 @@ class EnrichmentRepository:
         seen = set()
         text_columns = ("display_stdNo", "standardno")
 
-        for sdo_id, bucket in grouped.items():
+        for (sdo_id, _prefix), bucket in grouped.items():
             cores_in_batch = list(
                 dict.fromkeys(core for (core, _year) in bucket["containment"])
             )
@@ -674,10 +673,15 @@ class EnrichmentRepository:
         if not references:
             return []
 
-        requested_sdos = {
-            reference["sdo_name"]
-            for reference in references.values()
-        }
+        requested_sdos = set()
+        for reference in references.values():
+            requested_sdos.add(reference["sdo_name"])
+            if "/" in reference["sdo_name"]:
+                requested_sdos.update(
+                    part
+                    for part in reference["sdo_name"].split("/")
+                    if part
+                )
         sdo_rows = run_with_retry(
             self.db,
             lambda: self.db.query(SDO.id, SDO.sdo_title)
@@ -692,7 +696,10 @@ class EnrichmentRepository:
 
         filters = []
         for reference in references.values():
-            sdo_ids = sdo_ids_by_name.get(reference["sdo_name"], set())
+            sdo_ids = set(sdo_ids_by_name.get(reference["sdo_name"], set()))
+            if not sdo_ids and "/" in reference["sdo_name"]:
+                for part in reference["sdo_name"].split("/"):
+                    sdo_ids.update(sdo_ids_by_name.get(part, set()))
             if not sdo_ids:
                 continue
             identity = parse_identity(

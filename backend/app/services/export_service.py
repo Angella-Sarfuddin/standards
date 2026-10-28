@@ -80,35 +80,6 @@ class ExportService:
             )
 
             price = enrichment.get("price")
-            requested_standard = str(
-                result.get("requested_standard") or ""
-            )
-            catalog_designation = " ".join(
-                str(value or "")
-                for value in (
-                    standard.get("display_stdNo"),
-                    standard.get("standardno"),
-                )
-            )
-            is_bis_standard = ExportService._is_bis_standard(
-                result.get("requested_sdo"),
-                standard.get("display_stdNo") or standard.get("standardno"),
-            )
-            is_simple_is_edition = bool(
-                is_bis_standard
-                and re.match(
-                    r"(?i)\s*(?:IS|BIS)\b",
-                    f"{requested_standard} {catalog_designation}",
-                )
-                and not bis_names_another_standard(
-                    requested_standard,
-                    catalog_designation,
-                )
-            )
-            # Plain IS editions are free; discard any paid alias amount.
-            # ISO/IEC/IEEE adoptions retain their listed database price.
-            if is_simple_is_edition:
-                price = 0
             standard_year = standard.get("standardyear")
             if standard_year is None:
                 standard_year = enrichment.get("year")
