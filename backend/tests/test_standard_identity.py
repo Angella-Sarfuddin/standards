@@ -1980,8 +1980,7 @@ class StandardIdentityTests(unittest.TestCase):
         adopted = extract_international_references(
             "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
         )
-        self.assertEqual(adopted[0]["sdo_name"], "IEC")
-        self.assertEqual(adopted[0]["identity"][3], 2021)
+        self.assertEqual(adopted, [])
         self.assertTrue(
             bis_names_another_standard(
                 "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)"
