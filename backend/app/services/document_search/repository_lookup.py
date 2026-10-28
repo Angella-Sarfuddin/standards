@@ -1,7 +1,7 @@
 """Repository lookups used by the document-search workflow."""
 
-from app.utils.standard_formatter import normalize_display_number
-from app.utils.standard_identity import normalize_tokens
+from app.core.standard_formatter import normalize_display_number
+from app.core.standard_identity import normalize_tokens
 
 
 def row_has_display_candidates(row, candidate_map):

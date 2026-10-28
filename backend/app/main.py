@@ -3,10 +3,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import OperationalError
 
-from app.routes.standards_routes import router as standards_router
-from app.routes.excel_routes import router as excel_router
-from app.routes.export_routes import router as export_router
-from app.routes.document_routes import router as document_router
+from app.api.standards_routes import router as standards_router
+from app.api.excel_routes import router as excel_router
+from app.api.export_routes import router as export_router
+from app.api.document_routes import router as document_router
 
 
 app = FastAPI(

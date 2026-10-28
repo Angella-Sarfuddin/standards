@@ -2,7 +2,7 @@
 
 import re
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     bis_names_another_standard,
     extract_international_references,
     parse_identity,

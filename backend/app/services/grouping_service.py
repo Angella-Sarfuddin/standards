@@ -1,6 +1,6 @@
 
 from collections import defaultdict
-from app.utils.api_classification_filter import filter_api_classifications
+from app.core.api_classification_filter import filter_api_classifications
 
 
 class GroupingService:

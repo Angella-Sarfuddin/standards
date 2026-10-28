@@ -4,7 +4,7 @@ import time
 
 from app.services.document_search import identity_discovery
 from app.services.document_search.selection_context import use_candidate_status_map
-from app.utils.standard_identity import normalize_identity_core, normalize_tokens
+from app.core.standard_identity import normalize_identity_core, normalize_tokens
 
 
 def match_local_standards(

@@ -1,6 +1,6 @@
 # API reference
 
-This reference reflects route declarations and response construction in `backend/app/routes/` and the called controllers. The application does not declare explicit `response_model` values for these routes. Export bodies are typed as generic lists/dictionaries in route signatures, so this document does not invent stricter schemas.
+This reference reflects route declarations and response construction in `backend/app/api/`. The application does not declare explicit `response_model` values for these routes. Export bodies are typed as generic lists/dictionaries in route signatures, so this document does not invent stricter schemas.
 
 The FastAPI app registers routers in [`backend/app/main.py`](../backend/app/main.py). Backend routes below do **not** include `/api`; the frontend's Vite development proxy removes that prefix before forwarding.
 
@@ -16,16 +16,16 @@ Database-backed routes depend on `get_db()` unless noted. `DATABASE_URL` configu
 
 | Method and path | Request | Response behavior | Source |
 |---|---|---|---|
-| `POST /standards/search` | JSON `StandardsSearchRequest`: `standards: list[str]` | JSON object with `results`; `StandardsController.search_standards()` turns each non-empty string into a search row. A one-item list can be used for one designation; there is no separate single-standard route. | `StandardsSearchRequest`, `search_standards()` in [`standards_routes.py`](../backend/app/routes/standards_routes.py); [`standards_controller.py`](../backend/app/controllers/standards_controller.py) |
-| `POST /documents/search` | JSON `DocumentSearchRequest`: `rows: list[dict]`; optional `filename: str | None` | JSON object containing `filename`, `total`, `input_requests`, `duplicates_collapsed`, `matched`, `not_found`, `sdo_not_found`, `grouping`, and `results`. | `DocumentSearchRequest`, `search_document()` in [`document_routes.py`](../backend/app/routes/document_routes.py); [`document_controller.py`](../backend/app/controllers/document_controller.py) |
-| `POST /documents/extract` | Multipart form upload: required `file` | JSON object with `filename`, `total`, and extracted `results`. The route rejects a missing filename (400), files over 10 MiB (413), and unsupported extensions (400). | `extract_document()` in [`document_routes.py`](../backend/app/routes/document_routes.py) |
-| `POST /excel/upload` | Multipart form upload: required `file` | JSON object with `filename`, `total`, and extracted `results`. This endpoint extracts rows; it does not invoke standards search in its controller. | `upload_excel()` in [`excel_routes.py`](../backend/app/routes/excel_routes.py); [`excel_controller.py`](../backend/app/controllers/excel_controller.py) |
+| `POST /standards/search` | JSON `StandardsSearchRequest`: `standards: list[str]` | JSON object with `results`; `search_standards()` turns each non-empty string into a search row. A one-item list can be used for one designation; there is no separate single-standard route. | `StandardsSearchRequest` in [`standards.py`](../backend/app/schemas/standards.py); `search_standards()` in [`standards_routes.py`](../backend/app/api/standards_routes.py) |
+| `POST /documents/search` | JSON `DocumentSearchRequest`: `rows: list[dict]`; optional `filename: str | None` | JSON object containing `filename`, `total`, `input_requests`, `duplicates_collapsed`, `matched`, `not_found`, `sdo_not_found`, `grouping`, and `results`. | `DocumentSearchRequest` in [`document.py`](../backend/app/schemas/document.py); `search_document()` in [`document_routes.py`](../backend/app/api/document_routes.py) |
+| `POST /documents/extract` | Multipart form upload: required `file` | JSON object with `filename`, `total`, and extracted `results`. The route rejects a missing filename (400), files over 10 MiB (413), and unsupported extensions (400). | `extract_document()` in [`document_routes.py`](../backend/app/api/document_routes.py) |
+| `POST /excel/upload` | Multipart form upload: required `file` | JSON object with `filename`, `total`, and extracted `results`. This endpoint extracts rows; it does not invoke standards search in its controller. | `upload_excel()` in [`excel_routes.py`](../backend/app/api/excel_routes.py) |
 
 `DocumentService` currently recognizes `.xlsx`, `.xls`, `.pdf`, `.docx`, `.doc`, `.txt`, and `.csv`. This extension list is implementation behavior, not a guarantee that every malformed or oversized file is accepted. `/excel/upload` has no explicit size check in its route function.
 
 ## Export
 
-All exports return a file response with `Content-Disposition`. Export responses are binary, not JSON. Filenames and media types below are taken from `backend/app/routes/export_routes.py`.
+All exports return a file response with `Content-Disposition`. Export responses are binary, not JSON. Filenames and media types below are taken from `backend/app/api/export_routes.py`.
 
 | Method and path | Request | Response |
 |---|---|---|

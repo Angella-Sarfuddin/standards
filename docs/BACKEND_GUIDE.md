@@ -20,32 +20,31 @@ The small single-standard search uses the same search engine as the document sea
 | Folder or file | In everyday terms |
 |---|---|
 | `backend/app/main.py` | Starts the FastAPI application, connects its route groups, and handles database connection errors. |
-| `backend/app/routes/` | Defines the web addresses the frontend can call and what each request should contain. |
-| `backend/app/controllers/` | Connects an incoming web request to the work that needs to happen. |
+| `backend/app/api/` | Defines the web addresses the frontend can call and hands each request to the service that does the work. |
 | `backend/app/services/` | Contains the main application work: reading files, searching standards, grouping results, and making exports. |
 | `backend/app/services/document_search/` | Smaller helpers used by the document search engine to prepare requests, find matches, apply selection rules, and assemble results. |
 | `backend/app/repositories/` | Reads catalogue information from the database. |
 | `backend/app/models/` | Describes the database tables the backend expects to use. |
-| `backend/app/utils/` | Shared helpers for standard numbers, identity parsing, formatting, retries, and legacy file conversion. |
-| `backend/scripts/` | Utility scripts for inspecting database connections. |
+| `backend/app/schemas/` | Pydantic models for JSON request bodies. |
+| `backend/app/database/` | Loads `DATABASE_URL` and provides the SQLAlchemy session used by each request. |
+| `backend/app/core/` | Shared helpers for standard numbers, identity parsing, formatting, retries, and legacy file conversion. |
 
 ### How a request travels through the code
 
 Think of a request as passing through a short chain:
 
 ```text
-Frontend → Route → Controller → Service → Repository → Database
-                                      ↓
-                              Result or export
+Frontend → API route → Service → Repository → Database
+                                ↓
+                        Result or export
 ```
 
-- A **route** receives the web request.
-- A **controller** hands it to the right part of the application.
+- An **API route** receives the web request.
 - A **service** performs the actual task.
 - A **repository** gets the needed catalogue information from the database.
 - The result travels back to the frontend as JSON, or as a downloadable file.
 
-For example, `POST /documents/search` is declared in `routes/document_routes.py`. It calls `DocumentController`, which runs `DocumentSearchService`. The search service uses the repositories and helper modules to find and enrich results.
+For example, `POST /documents/search` is declared in `api/document_routes.py`. It runs `DocumentSearchService`. The search service uses the repositories and helper modules to find and enrich results.
 
 ## Main web addresses
 
@@ -93,7 +92,7 @@ That response includes counts, grouped results, and the detailed `results` list.
 
 The backend needs a standards catalogue database for searching and enrichment. The `DATABASE_URL` setting tells it how to connect. The URL format depends on the database driver; the checked-in example uses MySQL with PyMySQL.
 
-At startup, `backend/app/db/database.py` reads `DATABASE_URL`, creates a shared SQLAlchemy connection pool, and provides a short-lived database session to each request. The same configured database session is used for catalogue matching and result enrichment. The backend returns HTTP `503` when the database is unavailable.
+At startup, `backend/app/database/database.py` reads `DATABASE_URL`, creates a shared SQLAlchemy connection pool, and provides a short-lived database session to each request. The same configured database session is used for catalogue matching and result enrichment. The backend returns HTTP `503` when the database is unavailable.
 
 The database models describe tables such as standards, master catalogue entries, publisher/organization records (SDOs), statuses, prices, currencies, and classifications. They show what the code expects; they do not guarantee that a live database has exactly the same columns or data.
 
@@ -107,21 +106,16 @@ python -m venv .venv
 python -m pip install -r backend/requirements.txt
 ```
 
-Set `DATABASE_URL` in a local `.env` file. The project README explains how to create it from `backend/.env.example`. Keep real passwords and connection details out of Git.
+Set `DATABASE_URL` in the repository root `.env` file. Keep real passwords and connection details out of Git.
 
-Then start the API:
+Then start the API from the `backend` folder, so Python can import the `app` package:
 
 ```powershell
+Set-Location backend
 python -m uvicorn app.main:app --reload
 ```
 
 Open `http://127.0.0.1:8000/docs` to browse and try the API. These setup steps assume the database can be reached from your machine.
-
-To run the backend tests from the repository root:
-
-```powershell
-python -m unittest discover -s backend/tests -v
-```
 
 ## Files the backend can read
 

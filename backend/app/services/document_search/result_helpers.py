@@ -2,8 +2,8 @@
 
 import re
 
-from app.utils.standard_formatter import remove_draft_marker
-from app.utils.standard_identity import normalize_tokens
+from app.core.standard_formatter import remove_draft_marker
+from app.core.standard_identity import normalize_tokens
 
 
 def deduplicate_results(results, service_class):

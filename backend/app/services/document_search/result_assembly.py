@@ -6,7 +6,7 @@ import time
 from app.services.document_search.selection_context import use_candidate_status_map
 
 from app.services.ieee_official_metadata import IEEEOfficialMetadataService
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     normalize_identity_core,
     normalize_tokens,
     parse_identity,

@@ -3,7 +3,7 @@
 import re
 
 from app.services.document_search_service import DocumentSearchService
-from app.utils.standard_identity import parse_identity
+from app.core.standard_identity import parse_identity
 
 
 def _refresh_official_api_1176_rows(results, db):

@@ -11,8 +11,8 @@ fulltext query finds a core buried in a longer title such as
 from sqlalchemy import or_
 from sqlalchemy.dialects.mysql import match
 
-from app.utils.db_retry import run_with_retry
-from app.utils.standard_identity import (
+from app.core.db_retry import run_with_retry
+from app.core.standard_identity import (
     identity_core_appears,
     identity_fulltext_terms,
     identity_indexable_like_patterns,

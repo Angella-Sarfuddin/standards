@@ -1,6 +1,6 @@
 import re
 
-from app.utils.standard_expression_parser import StandardExpressionParser
+from app.core.standard_expression_parser import StandardExpressionParser
 
 
 class StandardExtractor:

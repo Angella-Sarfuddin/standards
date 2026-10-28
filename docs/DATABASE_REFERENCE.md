@@ -4,15 +4,13 @@ This document describes SQLAlchemy models and connection setup visible in the re
 
 ## Configuration and session lifecycle
 
-[`backend/app/db/database.py`](../backend/app/db/database.py) searches for a root `.env` first and `backend/.env` second, selecting the first existing file and loading it with `python-dotenv`. It reads `DATABASE_URL` and raises `ValueError` if that value is unavailable. It creates a SQLAlchemy engine with `pool_pre_ping=True` and `pool_recycle=1800`, then a `SessionLocal` factory. `get_db()` yields a session and closes it in `finally`.
+[`backend/app/database/database.py`](../backend/app/database/database.py) searches for a root `.env` first and `backend/.env` second, selecting the first existing file and loading it with `python-dotenv`. It reads `DATABASE_URL` and raises `ValueError` if that value is unavailable. It creates a SQLAlchemy engine with `pool_pre_ping=True` and `pool_recycle=1800`, then a `SessionLocal` factory. `get_db()` yields a session and closes it in `finally`.
 
-The sample in [`backend/.env.example`](../backend/.env.example) uses a MySQL/PyMySQL URL. The runtime uses the dialect specified by `DATABASE_URL`; the actual deployed engine and server version are unverified. The application path uses one configured session for search and enrichment, as shown by `DocumentSearchService.__init__()`.
-
-`ENRICHMENT_DATABASE_URL` appears in the example and README setup text, but `database.py` does not read it. The application does not require it during startup based on this module. The separate `backend/scripts/inspect_databases.py` reads both URL variables.
+The runtime uses the dialect specified by `DATABASE_URL`; the checked-in example shape is a MySQL/PyMySQL URL. The actual deployed engine and server version are unverified. The application path uses one configured session for search and enrichment, as shown by `DocumentSearchService.__init__()`. `database.py` reads `DATABASE_URL` only.
 
 ## ORM model inventory
 
-Models are defined under `backend/app/models/` and inherit from the shared `Base` in `app.db.database`.
+Models are defined under `backend/app/models/` and inherit from the shared `Base` in `app.database.database`.
 
 | Model | Table | Declared fields |
 |---|---|---|

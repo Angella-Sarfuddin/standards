@@ -8,8 +8,8 @@ import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from app.services.grouping_service import GroupingService
-from app.utils.api_classification_filter import filter_api_classifications
-from app.utils.standard_identity import bis_names_another_standard
+from app.core.api_classification_filter import filter_api_classifications
+from app.core.standard_identity import bis_names_another_standard
 
 
 class ExportService:

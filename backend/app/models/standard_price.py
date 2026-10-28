@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Numeric
-from app.db.database import Base
+from app.database.database import Base
 
 
 class StandardPrice(Base):

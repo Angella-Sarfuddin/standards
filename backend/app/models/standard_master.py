@@ -1,6 +1,6 @@
 
 from sqlalchemy import Column, Integer, String, SmallInteger, DateTime
-from app.db.database import Base
+from app.database.database import Base
 
 
 class StandardMaster(Base):

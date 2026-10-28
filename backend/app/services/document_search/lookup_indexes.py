@@ -1,7 +1,7 @@
 """Lookup indexes for exact, normalized, and standard-number results."""
 
-from app.utils.standard_formatter import normalize_display_number
-from app.utils.standard_identity import normalize_tokens
+from app.core.standard_formatter import normalize_display_number
+from app.core.standard_identity import normalize_tokens
 
 
 def build_lookup_indexes(

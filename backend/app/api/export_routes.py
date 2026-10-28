@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from app.db.database import get_db
+from app.database.database import get_db
 from app.services.export_preparation import (
     _expand_series_export_rows,
     _refresh_official_catalog_rows,

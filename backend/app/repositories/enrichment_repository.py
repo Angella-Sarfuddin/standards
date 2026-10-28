@@ -3,7 +3,7 @@ import re
 from sqlalchemy import and_, bindparam, or_, select, text
 
 from app.repositories.identity_lookup import fetch_long_core_candidates
-from app.utils.db_retry import run_with_retry
+from app.core.db_retry import run_with_retry
 
 from app.models.standard_master import StandardMaster
 from app.models.standard_status import StandardStatus
@@ -12,7 +12,7 @@ from app.models.currency import Currency
 from app.models.standard_classification import StandardClassification
 from app.models.sdo_classification import SDOClassification
 from app.models.sdo import SDO
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     adoption_price_like_patterns,
     identity_core_appears,
     sdo_identifier_prefixes,

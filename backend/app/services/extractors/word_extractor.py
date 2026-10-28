@@ -8,12 +8,12 @@ from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
 
 from app.services.extractors.base_extractor import BaseExtractor
-from app.utils.legacy_office import (
+from app.core.legacy_office import (
     OfficeConversionError,
     OfficeConversionUnavailable,
     converted_office_file,
 )
-from app.utils.standard_expression_parser import StandardExpressionParser
+from app.core.standard_expression_parser import StandardExpressionParser
 
 
 # A column whose header is one of these holds the standard, one per row.

@@ -1,6 +1,6 @@
 """Identity-hint candidate discovery for document searches."""
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     canonicalize_search_request,
     identity_index_cores,
     identity_lookup_core_tokens,
@@ -8,7 +8,7 @@ from app.utils.standard_identity import (
     normalize_tokens,
     parse_identity,
 )
-from app.utils.standard_expression_parser import StandardExpressionParser
+from app.core.standard_expression_parser import StandardExpressionParser
 
 
 def candidate_sdo_names(sdo_name, displaystdno, *, service_class):

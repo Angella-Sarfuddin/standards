@@ -1,6 +1,6 @@
 from app.repositories.standards_repository import StandardsRepository
-from app.utils.standard_formatter import remove_draft_marker
-from app.utils.normalizer import normalize_standard_number
+from app.core.standard_formatter import remove_draft_marker
+from app.core.normalizer import normalize_standard_number
 
 
 class SearchService:

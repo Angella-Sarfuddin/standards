@@ -5,11 +5,11 @@ import weakref
 from sqlalchemy import or_
 
 from app.repositories.identity_lookup import fetch_long_core_candidates
-from app.utils.db_retry import run_with_retry
+from app.core.db_retry import run_with_retry
 
 from app.models.standard import Standard
 from app.models.sdo import SDO
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     identity_core_appears,
     identity_discovery_terms,
     normalize_tokens,

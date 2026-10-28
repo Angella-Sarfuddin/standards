@@ -30,13 +30,13 @@ from app.services.document_search import master_fallback
 from app.services.document_search import result_assembly
 from app.services.document_search.selection_context import current_candidate_status_map
 
-from app.utils.standard_formatter import (
+from app.core.standard_formatter import (
     build_full_display_number,
     remove_draft_marker,
 )
 
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_identity import (
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_identity import (
     parse_identity,
     extract_international_references,
     standard_number_year,
@@ -48,7 +48,7 @@ from app.utils.standard_identity import (
     identity_lookup_core_tokens,
     reaffirmation_year,
 )
-from app.utils.api_classification_filter import filter_api_classifications
+from app.core.api_classification_filter import filter_api_classifications
 
 
 class DocumentSearchServiceMethods:

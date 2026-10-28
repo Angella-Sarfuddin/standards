@@ -4,7 +4,7 @@ import time
 
 from app.services.document_search.selection_context import use_candidate_status_map
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     identity_lookup_core_tokens,
     normalize_identity_core,
     normalize_tokens,

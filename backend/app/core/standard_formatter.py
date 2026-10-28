@@ -1,6 +1,6 @@
 import re
 
-from app.utils.standard_identity import sdo_identifier_prefixes
+from app.core.standard_identity import sdo_identifier_prefixes
 
 
 def normalize_display_number(value):

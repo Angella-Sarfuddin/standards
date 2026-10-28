@@ -6,13 +6,13 @@ This document describes the repository as its source currently establishes it. D
 
 The repository has a FastAPI backend under `backend/app/` and a React/Vite frontend under `frontend/`. The backend accepts structured search requests and document uploads, searches local and master catalogue records, enriches matches, and formats spreadsheet or ZIP exports.
 
-The application object is `app` in [`backend/app/main.py`](../backend/app/main.py). The root [`app/__init__.py`](../app/__init__.py) is a compatibility package that points imports at `backend/app`; root [`main.py`](../main.py) re-exports the application. The README's root command is therefore `python -m uvicorn app.main:app --reload`.
+The application object is `app` in [`backend/app/main.py`](../backend/app/main.py). Start it from the `backend` directory with `python -m uvicorn app.main:app --reload`.
 
 ## Architecture and request flow
 
-Routes in `backend/app/routes/` declare HTTP inputs and delegate to controllers or export services. Controllers in `backend/app/controllers/` adapt requests to service calls. Repositories encapsulate SQLAlchemy queries. ORM classes are in `backend/app/models/`; there is no separate schemas package in the current tree. Pydantic request models are declared in the relevant route modules.
+Routes in `backend/app/api/` declare HTTP inputs and call services or export helpers directly. Repositories encapsulate SQLAlchemy queries. ORM classes are in `backend/app/models/`. Pydantic request models are in `backend/app/schemas/` and are imported by the route modules that use them.
 
-For a document search, `DocumentController.search_document()` calls `DocumentSearchService.search()` in [`backend/app/services/document_search_service.py`](../backend/app/services/document_search_service.py). The service resolves SDO names, calls `input_preparation.prepare_input_rows()`, then performs display-number and exact/normalized repository lookups. It builds indexes, delegates local matching to `local_matching.match_local_standards()`, sends unresolved rows to `find_master_matches()` / `master_fallback.find_master_matches()`, and passes both result sets to `result_assembly.assemble_results()`. Result helpers perform not-found classification, result de-duplication, and master formatting. Search and fallback stages emit timing output.
+For a document search, `search_document()` in `backend/app/api/document_routes.py` calls `DocumentSearchService.search()` in [`backend/app/services/document_search_service.py`](../backend/app/services/document_search_service.py). The service resolves SDO names, calls `input_preparation.prepare_input_rows()`, then performs display-number and exact/normalized repository lookups. It builds indexes, delegates local matching to `local_matching.match_local_standards()`, sends unresolved rows to `find_master_matches()` / `master_fallback.find_master_matches()`, and passes both result sets to `result_assembly.assemble_results()`. Result helpers perform not-found classification, result de-duplication, and master formatting. Search and fallback stages emit timing output.
 
 `DocumentSearchService.__init__()` constructs `StandardsRepository` and `EnrichmentRepository` with the same SQLAlchemy session. Search, master fallback, price enrichment, and classification enrichment therefore share the configured application database session according to the current code.
 
@@ -45,11 +45,11 @@ The service retains compatibility methods that delegate to helpers. Those wrappe
 
 The offline `services/offline/standard_relationship_engine.py` is a separate service component. The current search and export flow does not establish its integration into live candidate selection or result assembly.
 
-## Controllers, services, repositories, models, and utilities
+## API routes, services, repositories, models, and utilities
 
-- `StandardsController` maps a list of standard strings to search rows and invokes `DocumentSearchService`.
-- `DocumentController` calls `DocumentService` for extraction and `DocumentSearchService` for search, then computes result counts and grouping.
-- `ExcelController` extracts an Excel upload and returns rows; its route comment states that search is separate.
+- `search_standards()` maps a list of standard strings to search rows and invokes `DocumentSearchService`.
+- `document_routes.py` calls `DocumentService` for extraction and `DocumentSearchService` for search, then computes result counts and grouping.
+- `upload_excel()` extracts an Excel upload and returns rows; its route comment states that search is separate.
 - `ExportService` creates XLSX workbooks and ZIP bundles. `GroupingService` groups result objects for the UI/export response.
 - `DocumentService` selects an extractor by file extension, expands canonical rows, and attaches source identity.
 - `StandardsRepository` queries the search table and SDO catalogue. `EnrichmentRepository` queries master standards, status, price, currency, and classification records.
@@ -59,24 +59,14 @@ The API routes and body/response behavior are listed in [API reference](API_REFE
 
 ## File processing and exports
 
-`DocumentService.SUPPORTED_EXTENSIONS` maps `.xlsx` and `.xls` to Excel, `.pdf` to PDF, `.docx` and `.doc` to Word, `.txt` to text, and `.csv` to CSV processing. Legacy `.doc` and `.xls` conversion uses LibreOffice through `utils/legacy_office.py`; `LIBREOFFICE_PATH` and `STANDARDS_TEMP_DIR` are optional environment controls. The `/documents/extract` route enforces a 10 MB limit; the `/excel/upload` route has no corresponding explicit size check in its route function.
+`DocumentService.SUPPORTED_EXTENSIONS` maps `.xlsx` and `.xls` to Excel, `.pdf` to PDF, `.docx` and `.doc` to Word, `.txt` to text, and `.csv` to CSV processing. Legacy `.doc` and `.xls` conversion uses LibreOffice through `core/legacy_office.py`; `LIBREOFFICE_PATH` and `STANDARDS_TEMP_DIR` are optional environment controls. The `/documents/extract` route enforces a 10 MB limit; the `/excel/upload` route has no corresponding explicit size check in its route function.
 
-Export routes call `ExportService`. Several routes also rerun search for specific API RP 1176 or NACE MR0103 requests; the combined found/not-found export additionally expands series rows. This behavior is confirmed in `backend/app/routes/export_routes.py`; its intended product contract and effect on user-submitted results require owner confirmation.
+Export routes call `ExportService`. Several routes also rerun search for specific API RP 1176 or NACE MR0103 requests; the combined found/not-found export additionally expands series rows. This behavior is confirmed in `backend/app/api/export_routes.py`; its intended product contract and effect on user-submitted results require owner confirmation.
 
 ## Operations
 
-The runtime requires `DATABASE_URL` at import time because `backend/app/db/database.py` creates the SQLAlchemy engine during module initialization. Actual connection/query activity occurs when database operations run; this handover did not connect. The example URL uses MySQL/PyMySQL, but the deployed engine and connection/network requirements are not verified.
+The runtime requires `DATABASE_URL` at import time because `backend/app/database/database.py` creates the SQLAlchemy engine during module initialization. Actual connection/query activity occurs when database operations run; this handover did not connect. The example URL uses MySQL/PyMySQL, but the deployed engine and connection/network requirements are not verified.
 
 The app maps SQLAlchemy `OperationalError` to HTTP 503 in `main.py`. CORS is configured for HTTP/HTTPS origins on `localhost` and `127.0.0.1`; this is the code's current configuration, not a deployment security recommendation. No authentication dependency is declared in the inspected route functions. Production authentication, proxy, TLS, process count, and CORS policy are not established by this repository inspection.
 
-Setup, environment configuration, startup, and test commands are in the root [README](../README.md). Database settings and model details are in [Database reference](DATABASE_REFERENCE.md).
-
-## Tests
-
-The suite is under `backend/tests/` and uses `unittest`. The documented root command is:
-
-```powershell
-python -m unittest discover -s backend/tests -v
-```
-
-There are focused test files for identity parsing, candidate filtering/resolution/selection, family behavior, input preparation, local and master matching, lifecycle status, result assembly, enrichment, repository lookup, deduplication, relationship-engine behavior, extraction formats, exports, and database dependency cleanup. The previously reported 251 passing tests are historical; no suite was run for this handover documentation task.
+Setup, environment configuration, and startup commands are in [Backend guide](BACKEND_GUIDE.md). Database settings and model details are in [Database reference](DATABASE_REFERENCE.md).
