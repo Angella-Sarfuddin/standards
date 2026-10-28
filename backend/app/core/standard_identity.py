@@ -1990,7 +1990,7 @@ def identity_matches(
     return True
 
 
-def standard_number_year(standard_number: str):
+def standard_number_year(standard_number: str) -> Optional[int]:
     """Best-effort extraction of an edition year from database standardno.
 
     Four-digit years are authoritative. Two-digit suffixes such as '-25' are

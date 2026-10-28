@@ -4,6 +4,18 @@ from app.core.standard_formatter import normalize_display_number
 from app.core.standard_identity import normalize_tokens
 
 
+def variant_tokens(row):
+    """Normalized display variants for one prepared request."""
+    tokens = row.get("normalized_variants")
+    if tokens is not None:
+        return tokens
+
+    return [
+        normalize_tokens(variant)
+        for variant in row["identity"].get("variants", [])
+    ]
+
+
 def row_has_display_candidates(row, candidate_map):
     """Whether a request has candidates for any normalized display variant."""
     sdo_id = row.get("sdo_id")
@@ -11,8 +23,8 @@ def row_has_display_candidates(row, candidate_map):
     if not sdo_id:
         return False
 
-    for variant in row["identity"].get("variants", []):
-        if candidate_map.get((sdo_id, normalize_tokens(variant))):
+    for token in variant_tokens(row):
+        if candidate_map.get((sdo_id, token)):
             return True
 
     return False
@@ -28,10 +40,10 @@ def direct_candidate_lists(
     """Collect the four direct candidate groups for a prepared request."""
     display_candidates = []
 
-    for variant in row["identity"].get("variants", []):
+    for token in variant_tokens(row):
         candidate_key = (
             row["sdo_id"],
-            normalize_tokens(variant),
+            token,
         )
         display_candidates.extend(candidate_map.get(candidate_key, []))
 

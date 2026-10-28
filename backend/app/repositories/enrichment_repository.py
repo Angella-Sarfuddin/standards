@@ -2,7 +2,15 @@ import re
 
 from sqlalchemy import and_, bindparam, or_, select, text
 
-from app.repositories.identity_lookup import fetch_long_core_candidates
+from app.repositories.identity_lookup import (
+    BOUND_PATTERN_BATCH,
+    IN_BATCH_SIZE,
+    LIKE_BATCH_SIZE,
+    fetch_long_core_candidates,
+    iter_batches,
+    keep_rows_containing_core,
+    unique_rows_by_id,
+)
 from app.core.db_retry import run_with_retry
 
 from app.models.standard_master import StandardMaster
@@ -132,6 +140,45 @@ class EnrichmentRepository:
             .all()
         )
 
+    def find_visible_nace_mr0103_records(self, sdo_id):
+        """Visible master rows whose number mentions MR0103 and ISO 17945."""
+        return (
+            self.db.query(StandardMaster)
+            .filter(
+                StandardMaster.sdo_id == sdo_id,
+                StandardMaster.standardno.ilike("%MR0103%"),
+                StandardMaster.standardno.ilike("%17945%"),
+                StandardMaster.status == 1,
+            )
+            .all()
+        )
+
+    def find_visible_hi_146_records(self, sdo_id):
+        """Visible HI 14.6 master rows for one publisher."""
+        return (
+            self.db.query(StandardMaster)
+            .filter(
+                StandardMaster.sdo_id == sdo_id,
+                StandardMaster.standardno.in_(["ANSI/HI 14.6", "HI 14.6"]),
+                StandardMaster.status == 1,
+            )
+            .all()
+        )
+
+    def find_visible_ieee_replacement(self, sdo_id, standardno, year):
+        """Visible IEEE replacement rows for one publisher, number, and year."""
+        return (
+            self.db.query(StandardMaster)
+            .filter(
+                StandardMaster.sdo_id == sdo_id,
+                StandardMaster.standardno == standardno,
+                StandardMaster.standardyear == year,
+                StandardMaster.status == 1,
+            )
+            .order_by(StandardMaster.id.asc())
+            .all()
+        )
+
     def get_latest_tema_edition(self, sdo_id):
         """Return the newest visible TEMA numbered edition in the catalogue."""
         if not sdo_id:
@@ -199,22 +246,8 @@ class EnrichmentRepository:
         results = []
         seen = set()
 
-        chunk_size = 400
-
         for sdo_id, display_numbers in grouped.items():
-
-            values = list(display_numbers)
-
-            for start in range(
-                0,
-                len(values),
-                chunk_size
-            ):
-
-                batch = values[
-                    start:start + chunk_size
-                ]
-
+            for batch in iter_batches(display_numbers, IN_BATCH_SIZE):
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
@@ -225,14 +258,7 @@ class EnrichmentRepository:
                             StandardMaster.display_stdNo.in_(batch),
                         ),
                 )
-
-                for row in rows:
-
-                    if row.id in seen:
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(unique_rows_by_id(rows, seen))
 
         return results
 
@@ -269,22 +295,8 @@ class EnrichmentRepository:
         results = []
         seen = set()
 
-        chunk_size = 400
-
         for sdo_id, standard_numbers in grouped.items():
-
-            values = list(standard_numbers)
-
-            for start in range(
-                0,
-                len(values),
-                chunk_size
-            ):
-
-                batch = values[
-                    start:start + chunk_size
-                ]
-
+            for batch in iter_batches(standard_numbers, IN_BATCH_SIZE):
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
@@ -295,14 +307,7 @@ class EnrichmentRepository:
                             StandardMaster.standardno.in_(batch),
                         ),
                 )
-
-                for row in rows:
-
-                    if row.id in seen:
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(unique_rows_by_id(rows, seen))
 
         return results
 
@@ -368,7 +373,7 @@ class EnrichmentRepository:
 
         results = []
         seen = set()
-        bound_chunk = 5
+        text_columns = ("display_stdNo", "standardno")
 
         for sdo_id, bucket in grouped.items():
             cores_in_batch = list(
@@ -396,36 +401,17 @@ class EnrichmentRepository:
                 extra_filters=tuple(extra_filters),
             )
 
-            for row in rows:
-                if row.id in seen:
-                    continue
-
-                display_value = str(
-                    row.display_stdNo or ""
-                ).strip()
-                standard_value = str(
-                    row.standardno or ""
-                ).strip()
-
-                if not display_value and not standard_value:
-                    continue
-
-                if not any(
-                    identity_core_appears(display_value, core)
-                    or identity_core_appears(
-                        standard_value,
-                        core,
-                    )
-                    for core in cores_in_batch
-                ):
-                    continue
-
-                seen.add(row.id)
-                results.append(row)
+            results.extend(
+                keep_rows_containing_core(
+                    rows,
+                    cores_in_batch,
+                    text_columns,
+                    seen,
+                )
+            )
 
             bound_items = list(bucket["bound"].items())
-            for start in range(0, len(bound_items), bound_chunk):
-                batch = bound_items[start:start + bound_chunk]
+            for batch in iter_batches(bound_items, BOUND_PATTERN_BATCH):
                 filters = []
                 cores_in_batch = []
                 years = {year for (_core, year), _pats in batch}
@@ -468,32 +454,14 @@ class EnrichmentRepository:
                     ),
                 )
 
-                for row in rows:
-                    if row.id in seen:
-                        continue
-
-                    display_value = str(
-                        row.display_stdNo or ""
-                    ).strip()
-                    standard_value = str(
-                        row.standardno or ""
-                    ).strip()
-
-                    if not display_value and not standard_value:
-                        continue
-
-                    if not any(
-                        identity_core_appears(display_value, core)
-                        or identity_core_appears(
-                            standard_value,
-                            core,
-                        )
-                        for core in cores_in_batch
-                    ):
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(
+                    keep_rows_containing_core(
+                        rows,
+                        cores_in_batch,
+                        text_columns,
+                        seen,
+                    )
+                )
 
         return results
 
@@ -640,8 +608,7 @@ class EnrichmentRepository:
             for pattern in patterns
         ]
         aliases_by_id = {}
-        for offset in range(0, len(likes), 200):
-            batch = likes[offset:offset + 200]
+        for batch in iter_batches(likes, LIKE_BATCH_SIZE):
             found = run_with_retry(
                 self.db,
                 lambda batch=batch: self.db.query(StandardMaster)

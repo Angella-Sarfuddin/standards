@@ -1,7 +1,10 @@
 """Result assembly for document search."""
 
+import logging
 import re
 import time
+
+logger = logging.getLogger(__name__)
 
 from app.services.document_search.selection_context import use_candidate_status_map
 
@@ -135,7 +138,7 @@ def assemble_results(
         }
     )
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] Enrichment: "
         f"{time.perf_counter() - stage_started:.3f}s"
     )
@@ -768,12 +771,12 @@ def assemble_results(
         result_templates[key] = [template]
         results.append(template)
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] Result building: "
         f"{time.perf_counter() - stage_started:.3f}s"
     )
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] END | "
         f"total={time.perf_counter() - started:.3f}s | "
         f"matched={sum(1 for r in results if r['matched'])} | "

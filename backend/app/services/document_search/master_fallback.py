@@ -1,7 +1,9 @@
 """Master-catalogue fallback orchestration for document search."""
 
+import logging
 import time
 
+from app.services.document_search.repository_lookup import variant_tokens
 from app.services.document_search.selection_context import use_candidate_status_map
 
 from app.core.standard_identity import (
@@ -9,6 +11,8 @@ from app.core.standard_identity import (
     normalize_identity_core,
     normalize_tokens,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def find_master_matches(
@@ -60,7 +64,7 @@ def find_master_matches(
             pairs
         )
     )
-    print(
+    logger.info(
         f"[SEARCH TIMING] Master display query: "
         f"{time.perf_counter() - stage_started:.3f}s | "
         f"pairs={len(pairs)} candidates={len(masters)}"
@@ -115,7 +119,7 @@ def find_master_matches(
         if callable(status_lookup)
         else {}
     )
-    print(
+    logger.info(
         f"[SEARCH TIMING] Master standardno query: "
         f"{time.perf_counter() - stage_started:.3f}s | "
         f"pairs={len(standard_pairs)} candidates={len(standard_masters)}"
@@ -147,12 +151,12 @@ def find_master_matches(
 
     for row in unresolved_rows:
         row_masters = []
-        for variant in row["identity"].get("variants", []):
+        for token in variant_tokens(row):
             row_masters.extend(
                 display_grouped.get(
                     (
                         row["sdo_id"],
-                        normalize_tokens(variant),
+                        token,
                     ),
                     [],
                 )
@@ -246,7 +250,7 @@ def find_master_matches(
                 additional_status_ids
             )
         )
-    print(
+    logger.info(
         f"[SEARCH TIMING] Master identity query: "
         f"{time.perf_counter() - stage_started:.3f}s | "
         f"hints={len(identity_hints)} candidates={len(identity_masters)}"
@@ -365,7 +369,7 @@ def find_master_matches(
         if selected:
             matches[row["request_key"]] = selected
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] Master candidate selection: "
         f"{time.perf_counter() - stage_started:.3f}s"
     )

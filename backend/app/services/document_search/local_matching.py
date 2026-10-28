@@ -1,6 +1,9 @@
 """Orchestrate local candidate discovery and matching for document search."""
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 from app.services.document_search import identity_discovery
 from app.services.document_search.selection_context import use_candidate_status_map
@@ -115,7 +118,7 @@ def match_local_standards(
             )
         )
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] Identity lookup: "
         f"{time.perf_counter() - stage_started:.3f}s | "
         f"hints={len(identity_hints)} | "
@@ -238,7 +241,7 @@ def match_local_standards(
         else:
             unresolved.append(row)
 
-    print(
+    logger.info(
         f"[SEARCH TIMING] Local matching: "
         f"{time.perf_counter() - stage_started:.3f}s"
     )

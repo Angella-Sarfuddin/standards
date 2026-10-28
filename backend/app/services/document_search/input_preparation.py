@@ -254,6 +254,10 @@ def prepare_input_rows(
                 ),
                 "expand_family": expand_family,
                 "request_key": request_key,
+                "normalized_variants": [
+                    normalize_tokens(variant)
+                    for variant in identity.get("variants", [])
+                ],
                 # Preserve separate Excel line items through the final
                 # response even when they resolve to one catalog record.
                 "source_request_identity": (

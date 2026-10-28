@@ -3,7 +3,7 @@ import re
 from app.core.standard_identity import sdo_identifier_prefixes
 
 
-def normalize_display_number(value):
+def normalize_display_number(value: object) -> str:
     if not value:
         return ""
 
@@ -11,7 +11,7 @@ def normalize_display_number(value):
     return re.sub(r"\s+", " ", value)
 
 
-def remove_draft_marker(value):
+def remove_draft_marker(value: object) -> object:
     """Remove a trailing catalogue ``(DRAFT)`` label from display text."""
     if value is None:
         return value
@@ -24,7 +24,7 @@ def remove_draft_marker(value):
     return re.sub(r"\s+", " ", value).strip()
 
 
-def build_full_display_number(sdo_name, displaystdno):
+def build_full_display_number(sdo_name: object, displaystdno: object) -> str:
     sdo_name = normalize_display_number(sdo_name)
     displaystdno = normalize_display_number(displaystdno)
 

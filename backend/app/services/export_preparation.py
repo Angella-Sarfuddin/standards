@@ -2,8 +2,9 @@
 
 import re
 
-from app.services.document_search_service import DocumentSearchService
 from app.core.standard_identity import parse_identity
+from app.services.document_search_service import DocumentSearchService
+from app.services.grouping_service import GroupingService
 
 
 def _refresh_official_api_1176_rows(results, db):
@@ -201,3 +202,44 @@ def _expand_series_export_rows(results, db):
         seen.add(key)
         deduplicated.append(result)
     return deduplicated
+
+
+def refresh_official_catalog_rows(results, db):
+    return _refresh_official_catalog_rows(results, db)
+
+
+def expand_series_export_rows(results, db):
+    return _expand_series_export_rows(results, db)
+
+
+def prepare_quotation_export(results, db):
+    results = refresh_official_catalog_rows(results, db)
+    return {
+        "results": results,
+        "grouping": GroupingService.group_results(results),
+    }
+
+
+def prepare_latest_year_export(results, db):
+    return refresh_official_catalog_rows(results, db)
+
+
+def prepare_both_export(quotation_results, latest_year_results, db):
+    quotation_results = refresh_official_catalog_rows(quotation_results, db)
+    latest_year_results = refresh_official_catalog_rows(latest_year_results, db)
+    return (
+        {
+            "results": quotation_results,
+            "grouping": GroupingService.group_results(quotation_results),
+        },
+        latest_year_results,
+    )
+
+
+def prepare_found_and_not_found_export(quotation_results, all_results, db):
+    quotation_results = refresh_official_catalog_rows(quotation_results, db)
+    all_results = refresh_official_catalog_rows(all_results, db)
+    return (
+        expand_series_export_rows(quotation_results, db),
+        expand_series_export_rows(all_results, db),
+    )

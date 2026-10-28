@@ -8,8 +8,12 @@ fulltext query finds a core buried in a longer title such as
 ``identity_core_appears`` says the requested number is actually present.
 """
 
+from collections.abc import Iterable, Iterator
+from typing import Any
+
 from sqlalchemy import or_
 from sqlalchemy.dialects.mysql import match
+from sqlalchemy.orm import Session
 
 from app.core.db_retry import run_with_retry
 from app.core.standard_identity import (
@@ -18,22 +22,72 @@ from app.core.standard_identity import (
     identity_indexable_like_patterns,
 )
 
-_MAX_LIKES_PER_QUERY = 200
-_MAX_FULLTEXT_CORES = 200
+IN_BATCH_SIZE = 400
+BOUND_PATTERN_BATCH = 5
+LIKE_BATCH_SIZE = 200
+FULLTEXT_CORE_BATCH = 200
+
+
+def iter_batches(values: Iterable[Any], size: int) -> Iterator[list[Any]]:
+    """Yield successive slices without changing item order."""
+    items = list(values)
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+def unique_rows_by_id(rows: Iterable[Any], seen: set | None = None) -> list[Any]:
+    """Keep the first row for each primary key."""
+    if seen is None:
+        seen = set()
+    kept = []
+    for row in rows:
+        row_id = row.id
+        if row_id in seen:
+            continue
+        seen.add(row_id)
+        kept.append(row)
+    return kept
+
+
+def keep_rows_containing_core(
+    rows: Iterable[Any],
+    cores: Iterable[str],
+    column_names: Iterable[str],
+    seen: set,
+) -> list[Any]:
+    """Accept a row only when one of ``cores`` is present in its text columns."""
+    cores = [core for core in cores if core]
+    names = tuple(column_names)
+    kept = []
+    for row in rows:
+        if row.id in seen:
+            continue
+        values = [
+            str(getattr(row, name) or "").strip()
+            for name in names
+        ]
+        if any(
+            identity_core_appears(value, core)
+            for value in values
+            for core in cores
+        ):
+            seen.add(row.id)
+            kept.append(row)
+    return kept
 
 
 def fetch_long_core_candidates(
-    db,
+    db: Session,
     *,
-    model,
-    sdo_id,
-    cores,
-    sdo_prefixes,
-    text_columns,
-    fulltext_column,
-    normalized_column=None,
-    extra_filters=(),
-):
+    model: Any,
+    sdo_id: int,
+    cores: Iterable[str],
+    sdo_prefixes: Iterable[str],
+    text_columns: Iterable[Any],
+    fulltext_column: Any,
+    normalized_column: Any = None,
+    extra_filters: tuple = (),
+) -> list[Any]:
     """Return catalogue rows that might contain one of ``cores``.
 
     Rows are not identity-checked here. The repository applies
@@ -43,7 +97,7 @@ def fetch_long_core_candidates(
     if not cores:
         return []
 
-    rows = _prefix_candidates(
+    rows = prefix_index_candidates(
         db,
         model=model,
         sdo_id=sdo_id,
@@ -56,23 +110,28 @@ def fetch_long_core_candidates(
     missing = [
         core
         for core in cores
-        if not _core_appears(rows, core, text_columns, normalized_column)
+        if not row_contains_core(rows, core, text_columns, normalized_column)
     ]
+    seen: set = set()
+    unique = unique_rows_by_id(rows, seen)
     if missing:
-        rows.extend(
-            _fulltext_candidates(
-                db,
-                model=model,
-                sdo_id=sdo_id,
-                cores=missing,
-                fulltext_column=fulltext_column,
-                extra_filters=extra_filters,
+        unique.extend(
+            unique_rows_by_id(
+                fulltext_candidates(
+                    db,
+                    model=model,
+                    sdo_id=sdo_id,
+                    cores=missing,
+                    fulltext_column=fulltext_column,
+                    extra_filters=extra_filters,
+                ),
+                seen,
             )
         )
-    return rows
+    return unique
 
 
-def _core_appears(rows, core, text_columns, normalized_column):
+def row_contains_core(rows, core, text_columns, normalized_column):
     columns = list(text_columns)
     if normalized_column is not None:
         columns.append(normalized_column)
@@ -84,7 +143,7 @@ def _core_appears(rows, core, text_columns, normalized_column):
     return False
 
 
-def _prefix_candidates(
+def prefix_index_candidates(
     db,
     *,
     model,
@@ -130,14 +189,14 @@ def _prefix_candidates(
                 likes.append(normalized_column.like(pattern))
         if not likes:
             continue
-        if pending_likes and len(pending_likes) + len(likes) > _MAX_LIKES_PER_QUERY:
+        if pending_likes and len(pending_likes) + len(likes) > LIKE_BATCH_SIZE:
             run()
         pending_likes.extend(likes)
     run()
     return rows
 
 
-def _fulltext_candidates(
+def fulltext_candidates(
     db,
     *,
     model,
@@ -147,9 +206,9 @@ def _fulltext_candidates(
     extra_filters,
 ):
     rows = []
-    for start in range(0, len(cores), _MAX_FULLTEXT_CORES):
+    for batch in iter_batches(cores, FULLTEXT_CORE_BATCH):
         terms = []
-        for core in cores[start:start + _MAX_FULLTEXT_CORES]:
+        for core in batch:
             terms.extend(identity_fulltext_terms(core))
         terms = list(dict.fromkeys(terms))
         if not terms:
