@@ -229,10 +229,9 @@ class StandardsRepository:
                 continue
 
             bucket = grouped.setdefault(
-                int(sdo_id),
-                {"containment": {}, "bound": {}, "prefixes": set()},
+                (int(sdo_id), sdo_prefix),
+                {"containment": {}, "bound": {}, "prefixes": {sdo_prefix}},
             )
-            bucket["prefixes"].add(sdo_prefix)
 
             if containment:
                 bucket["containment"][core] = containment
@@ -246,7 +245,7 @@ class StandardsRepository:
         seen = set()
         bound_chunk = 5
 
-        for sdo_id, bucket in grouped.items():
+        for (sdo_id, _prefix), bucket in grouped.items():
             cores_in_batch = list(bucket["containment"])
             rows = fetch_long_core_candidates(
                 self.db,

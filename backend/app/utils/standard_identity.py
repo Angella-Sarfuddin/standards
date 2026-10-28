@@ -544,7 +544,18 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         compact,
     )
     patterns = []
-    if not numbered_part:
+    joint_spellings = (
+        sdo_identifier_prefixes(prefix)
+        if bis_joint_publishers(prefix)
+        else ()
+    )
+    if not numbered_part and joint_spellings:
+        for spelling in joint_spellings:
+            patterns.extend([
+                f"{spelling} {compact}%",
+                f"{spelling}{compact}%",
+            ])
+    elif not numbered_part:
         patterns.extend([
             f"{prefix} {compact}%",
             f"{prefix}{compact}%",
@@ -564,7 +575,7 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         root = numbered_part.group("root")
         part = str(int(numbered_part.group("part")))
         section = numbered_part.group("section")
-        for spelling in sdo_identifier_prefixes(prefix):
+        for spelling in (joint_spellings or sdo_identifier_prefixes(prefix)):
             if len(root) >= 4:
                 patterns.append(f"{spelling} {root}%")
                 continue
@@ -663,7 +674,7 @@ def _catalogue_section_appears(value: str, root: str, part: str, section: str) -
     """
     return bool(
         re.search(
-            rf"(?<!\d){re.escape(root)}(?:PART)?{re.escape(part)}"
+            rf"(?<!\d){re.escape(root)}(?:PART|PT)?{re.escape(part)}"
             rf"(?:SEC(?:TION)?)?{re.escape(section)}"
             rf"(?:(?:19|20)\d{{2}})?(?!\d)",
             value,
@@ -679,7 +690,7 @@ def _catalogue_part_appears(value: str, root: str, part: str) -> bool:
     """
     return bool(
         re.search(
-            rf"(?<!\d){re.escape(root)}(?:PART)?{re.escape(part)}"
+            rf"(?<!\d){re.escape(root)}(?:PART|PT)?{re.escape(part)}"
             rf"(?:SEC(?:TION)?\d{{1,2}}|[1-9]\d?)?"
             rf"(?:(?:19|20)\d{{2}})?(?!\d)",
             value,
@@ -734,10 +745,84 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
         start = pos + 1
 
 
+def bis_joint_publishers(value: str) -> Tuple[str, ...]:
+    """Publishers in one slash-joined BIS designation.
+
+    ``IS/IEC`` and ``IS IEC`` are the chain ``(IS, IEC)``. A plain ``IS``
+    number is not a chain. ``PART`` and the other qualifier words are not
+    publishers.
+    """
+    text = re.sub(r"\s*/\s*", " ", normalize_tokens(value).upper())
+    text = re.sub(r"^BIS\s+", "", text)
+    publishers = []
+    for token in text.split():
+        if token in _ADOPTION_QUALIFIER_WORDS or not re.fullmatch(r"[A-Z][A-Z0-9]*", token):
+            break
+        publishers.append(token)
+    if len(publishers) < 2 or publishers[0] not in {"IS", "BIS"}:
+        return ()
+    return tuple(publishers)
+
+
+def _bis_joint_chain_spellings(publishers: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Catalogue spellings of this chain, not a shorter or different one.
+
+    ``IS/IEC`` also reaches ``IS/IEC/IEEE``, because that row is the same
+    BIS designation with another publisher kept in the chain. It does not
+    reach plain ``IS`` or plain ``IEC``.
+    """
+    requested = list(publishers)
+    spellings = []
+    candidates = [
+        "/".join(requested),
+        " ".join(requested),
+        f"BIS {'/'.join(requested)}",
+        f"BIS {' '.join(requested)}",
+        *SDO_IDENTIFIER_PREFIX_ALIASES.get("BIS", ()),
+    ]
+    for spelling in candidates:
+        body = re.sub(
+            r"\s*/\s*",
+            " ",
+            normalize_tokens(spelling).upper(),
+        )
+        body = re.sub(r"^BIS\s+", "", body)
+        found = body.split()
+        if (
+            found[:len(requested)] == requested
+            or (
+                len(found) >= 2
+                and requested[:len(found)] == found
+            )
+        ):
+            spellings.append(normalize_tokens(spelling))
+    return tuple(dict.fromkeys(spellings))
+
+
+def identity_pattern_prefix(search_sdo_name: str, identifier_prefix: str = None) -> str:
+    """Prefix used to build catalogue LIKE patterns for one request."""
+    if bis_joint_publishers(identifier_prefix or ""):
+        return identifier_prefix
+    return search_sdo_name
+
+
+def is_bis_joint_designation(*values: str) -> bool:
+    """True when a BIS designation is itself a slash-joined chain."""
+    text = " ".join(str(value or "") for value in values)
+    return bool(re.search(
+        r"(?i)(?:^|[^\w])(?:BIS\s+)?IS\s*/\s*"
+        r"(?!PART\b|PT\b|SEC\b|SECTION\b|AMD\b|REV\b)[A-Z][A-Z0-9]*",
+        text,
+    ))
+
+
 def sdo_identifier_prefixes(sdo_name: str) -> Tuple[str, ...]:
     sdo = normalize_tokens(sdo_name)
     if not sdo:
         return ()
+    joint = bis_joint_publishers(sdo)
+    if joint:
+        return _bis_joint_chain_spellings(joint)
     # IS and BIS are one catalogue. Compound adoptions such as IS/IEC
     # and IS/ISO use the BIS prefix list.
     names = [sdo]
@@ -1665,22 +1750,33 @@ def _referenced_publishers(publisher: str, *, inside_parentheses: bool) -> List[
     ]
     if not tokens:
         return []
+    others = [token for token in tokens if token not in {"IS", "BIS"}]
+    # IS/IEC, IS/ISO, and IS/IEC/IEEE stay one BIS designation. The other
+    # publisher is not a separate price lookup. A parenthetical citation
+    # is handled by the caller and is not returned here.
+    if any(token in {"IS", "BIS"} for token in tokens) and others:
+        publishers = list(others)
+        if len(others) > 1:
+            publishers.append("/".join(others))
+        return publishers
     if all(token in {"IS", "BIS"} for token in tokens):
         return tokens if inside_parentheses else []
-    return [token for token in tokens if token not in {"IS", "BIS"}]
+    return others
 
 
 def extract_international_references(display_number: str) -> List[Dict]:
-    """Extract an adopted edition named by a BIS designation.
+    """Extract a slash-joined publisher named in the BIS designation itself.
 
-    The adopted publisher can be any catalogue publisher, as in
-    ``IS 12065 : 2025(IEC 60034-9 : 2021, MOD)``. A publisher, number, and
-    year must all be present. The outer IS number itself is not a reference.
+    ``IS/IEC 60079 : Part 5 : 2015`` names IEC. A parenthetical citation such
+    as ``IS 1076 : Part 3 : 1985(ISO 497 : 1973)`` stays part of that one
+    BIS designation and is not a second standard.
     """
     value = clean(display_number)
     references = []
     seen = set()
     for match in _ADOPTION_REFERENCE_RE.finditer(value):
+        if _reference_is_inside_parentheses(value, match.start()):
+            continue
         publishers = _referenced_publishers(
             match.group("sdo"),
             inside_parentheses=_reference_is_inside_parentheses(
@@ -1725,7 +1821,27 @@ def bis_names_another_standard(*values: str) -> bool:
         return False
     if extract_international_references(text):
         return True
+    if _parenthetical_names_another_publisher(text):
+        return True
     return bool(_JOINT_ADOPTION_RE.search(text))
+
+
+def _parenthetical_names_another_publisher(text: str) -> bool:
+    """True when parentheses cite ISO, IEC, or another publisher.
+
+    That citation stays part of the BIS designation. It marks the standard
+    as combined so its price comes from the BIS India row.
+    """
+    for match in _ADOPTION_REFERENCE_RE.finditer(text):
+        if not _reference_is_inside_parentheses(text, match.start()):
+            continue
+        publishers = _referenced_publishers(
+            match.group("sdo"),
+            inside_parentheses=True,
+        )
+        if any(publisher not in {"IS", "BIS"} for publisher in publishers):
+            return True
+    return False
 
 
 def _full_variants(sdo: str, body: str) -> List[str]:
