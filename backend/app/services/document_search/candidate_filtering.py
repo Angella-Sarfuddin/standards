@@ -2,7 +2,7 @@
 
 import re
 
-from app.utils.standard_identity import normalize_tokens
+from app.core.standard_identity import normalize_tokens
 
 
 def _candidate_revision_suffix(candidate):

@@ -2,7 +2,7 @@
 
 import re
 
-from app.utils.standard_identity import normalize_identity_core, parse_identity
+from app.core.standard_identity import normalize_identity_core, parse_identity
 
 
 def _candidate_is_part_of_root(candidate, row):

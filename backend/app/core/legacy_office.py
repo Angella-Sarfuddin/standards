@@ -1,12 +1,19 @@
 """Helpers for reading legacy Microsoft Office formats without xlrd/Word COM."""
 
+from collections.abc import Iterator
 from contextlib import contextmanager
+import logging
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import uuid
+
+
+logger = logging.getLogger(__name__)
+
+ALLOWED_TARGET_EXTENSIONS = {".docx", ".xlsx"}
 
 
 class OfficeConversionUnavailable(RuntimeError):
@@ -17,7 +24,7 @@ class OfficeConversionError(RuntimeError):
     """Raised when LibreOffice cannot convert the supplied Office file."""
 
 
-def _soffice_path():
+def _soffice_path() -> str:
     configured = os.environ.get("LIBREOFFICE_PATH")
     candidates = [configured, shutil.which("soffice")]
     if os.name == "nt":
@@ -38,7 +45,7 @@ def _soffice_path():
     )
 
 
-def _read_upload(file):
+def _read_upload(file: object) -> bytes:
     if isinstance(file, (str, os.PathLike)):
         return Path(file).read_bytes()
     if hasattr(file, "seek"):
@@ -51,7 +58,7 @@ def _read_upload(file):
     return bytes(file)
 
 
-def _create_conversion_directory():
+def _create_conversion_directory() -> Path:
     """Create an Office workspace with inherited filesystem permissions.
 
     ``TemporaryDirectory`` creates a private directory on Windows. On some
@@ -82,10 +89,32 @@ def _create_conversion_directory():
     )
 
 
+def _target_extension(target_extension: str) -> str:
+    extension = str(target_extension or "").lower()
+    if not extension.startswith("."):
+        extension = f".{extension}"
+    if extension not in ALLOWED_TARGET_EXTENSIONS:
+        raise OfficeConversionError(
+            "Legacy Office conversion only supports .docx and .xlsx output."
+        )
+    return extension
+
+
 @contextmanager
-def converted_office_file(file, filename, target_extension, timeout=90):
+def converted_office_file(
+    file: object,
+    filename: str | None,
+    target_extension: str,
+    timeout: int = 90,
+) -> Iterator[Path]:
     """Yield a temporary converted file, using an isolated LibreOffice profile."""
+    target_extension = _target_extension(target_extension)
     soffice = _soffice_path()
+    logger.info(
+        "Converting %s to %s with LibreOffice",
+        Path(str(filename or "upload")).name,
+        target_extension,
+    )
     source_name = Path(str(filename or "upload")).name
     source_extension = Path(source_name).suffix or ".bin"
 
@@ -135,10 +164,16 @@ def converted_office_file(file, filename, target_extension, timeout=90):
         try:
             completed = subprocess.run(command, **options)
         except subprocess.TimeoutExpired as exc:
+            logger.error(
+                "LibreOffice timed out after %s seconds converting %s",
+                timeout,
+                source_name,
+            )
             raise OfficeConversionError(
                 f"LibreOffice took longer than {timeout} seconds to read the file."
             ) from exc
         except OSError as exc:
+            logger.exception("LibreOffice could not be started")
             raise OfficeConversionError(
                 f"LibreOffice could not be started: {exc}"
             ) from exc
@@ -146,9 +181,14 @@ def converted_office_file(file, filename, target_extension, timeout=90):
         converted = output_dir / (source.stem + target_extension)
         if completed.returncode != 0 or not converted.is_file():
             detail = (completed.stderr or completed.stdout or "").strip()
+            logger.warning(
+                "LibreOffice conversion failed code=%s file=%s detail=%s",
+                completed.returncode,
+                source_name,
+                detail[:500],
+            )
             raise OfficeConversionError(
                 "LibreOffice could not convert this legacy Office file."
-                + (f" {detail}" if detail else "")
             )
 
         yield converted

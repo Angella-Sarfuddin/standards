@@ -6,8 +6,8 @@ from app.services.extractors.word_extractor import WordExtractor
 from app.services.extractors.text_extractor import TextExtractor
 from app.services.extractors.csv_extractor import CSVExtractor
 from app.services.standard_extractor import StandardExtractor
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_identity import (
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_identity import (
     canonicalize_search_request,
     normalize_identity_core,
     normalize_tokens,

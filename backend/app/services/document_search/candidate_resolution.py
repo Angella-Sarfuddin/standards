@@ -2,7 +2,7 @@
 
 import re
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     identity_matches,
     normalize_identity_core,
     parse_identity,

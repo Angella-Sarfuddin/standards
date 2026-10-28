@@ -1,6 +1,6 @@
 import re
 
-from app.utils.standard_identity import parse_identity, standard_number_year
+from app.core.standard_identity import parse_identity, standard_number_year
 
 
 def _candidate_base_edition_year(candidate):

@@ -10,7 +10,6 @@ import time
 
 from app.repositories.standards_repository import StandardsRepository
 from app.repositories.enrichment_repository import EnrichmentRepository
-from app.models.standard_master import StandardMaster
 from app.services.search_service import SearchService
 from app.services.ieee_official_metadata import IEEEOfficialMetadataService
 from app.services.document_search import candidate_resolution
@@ -30,13 +29,13 @@ from app.services.document_search import master_fallback
 from app.services.document_search import result_assembly
 from app.services.document_search.selection_context import current_candidate_status_map
 
-from app.utils.standard_formatter import (
+from app.core.standard_formatter import (
     build_full_display_number,
     remove_draft_marker,
 )
 
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_identity import (
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_identity import (
     parse_identity,
     extract_international_references,
     standard_number_year,
@@ -48,10 +47,18 @@ from app.utils.standard_identity import (
     identity_lookup_core_tokens,
     reaffirmation_year,
 )
-from app.utils.api_classification_filter import filter_api_classifications
+from app.core.api_classification_filter import filter_api_classifications
 
 
 class DocumentSearchServiceMethods:
+    def _memo(self, name):
+        """Request-scoped map. One search creates one service instance."""
+        memos = getattr(self, "_search_memos", None)
+        if memos is None:
+            memos = {}
+            self._search_memos = memos
+        return memos.setdefault(name, {})
+
     @staticmethod
     def _deduplicate_results(results):
         return result_helpers.deduplicate_results(
@@ -109,9 +116,14 @@ class DocumentSearchServiceMethods:
         if not core or len(core) < 3:
             return None
 
-        candidates = self.enrichment_repository.search_master_candidates_across_sdos(
-            core
-        )
+        catalog_cache = self._memo("catalog_cores")
+        if core not in catalog_cache:
+            catalog_cache[core] = (
+                self.enrichment_repository.search_master_candidates_across_sdos(
+                    core
+                )
+            )
+        candidates = catalog_cache[core]
         if len(candidates) >= 501:
             return None
 
@@ -230,15 +242,13 @@ class DocumentSearchServiceMethods:
         if "MR0103" not in normalized or "ISO17945" not in normalized:
             return None
 
+        sdo_id = row.get("sdo_id")
+        cache = self._memo("nace_mr0103")
+        if sdo_id in cache:
+            return cache[sdo_id]
+
         candidates = (
-            self.repository.db.query(StandardMaster)
-            .filter(
-                StandardMaster.sdo_id == row.get("sdo_id"),
-                StandardMaster.standardno.ilike("%MR0103%"),
-                StandardMaster.standardno.ilike("%17945%"),
-                StandardMaster.status == 1,
-            )
-            .all()
+            self.enrichment_repository.find_visible_nace_mr0103_records(sdo_id)
         )
         candidates = [
             candidate
@@ -249,7 +259,7 @@ class DocumentSearchServiceMethods:
                 str(candidate.standardno or "").upper(),
             ).startswith("ANSINACE")
         ]
-        return max(
+        selected = max(
             candidates,
             key=lambda candidate: (
                 int(getattr(candidate, "standardyear", 0) or 0),
@@ -257,6 +267,8 @@ class DocumentSearchServiceMethods:
             ),
             default=None,
         )
+        cache[sdo_id] = selected
+        return selected
 
     def _official_hi_replacement(self, row):
         """Resolve superseded HI 2.6 hydraulic tests to current HI 14.6."""
@@ -273,11 +285,15 @@ class DocumentSearchServiceMethods:
         ):
             return None
 
-        candidates = self.repository.db.query(StandardMaster).filter(
-            StandardMaster.sdo_id == row.get("sdo_id"),
-            StandardMaster.standardno.in_(["ANSI/HI 14.6", "HI 14.6"]),
-            StandardMaster.status == 1,
-        ).all()
+        sdo_id = row.get("sdo_id")
+        cache = self._memo("hi_146")
+        if sdo_id in cache:
+            return cache[sdo_id]
+
+        candidates = self.enrichment_repository.find_visible_hi_146_records(
+            sdo_id
+        )
+        selected = None
         for candidate in candidates:
             number = str(
                 getattr(candidate, "standardno", "")
@@ -289,9 +305,11 @@ class DocumentSearchServiceMethods:
                 and "HYDRAULIC PERFORMANCE ACCEPTANCE TEST" in title
                 and getattr(candidate, "status", None) == 1
             ):
-                return candidate
+                selected = candidate
+                break
 
-        return None
+        cache[sdo_id] = selected
+        return selected
 
     def _official_ieee_replacement(self, row, metadata=None):
         """Return the active catalogue row for a verified IEEE target."""
@@ -302,13 +320,23 @@ class DocumentSearchServiceMethods:
         if metadata is None or not row.get("sdo_id"):
             return None
 
-        candidates = self.repository.db.query(StandardMaster).filter(
-            StandardMaster.sdo_id == row["sdo_id"],
-            StandardMaster.standardno == metadata.replacement_standardno,
-            StandardMaster.standardyear == metadata.replacement_year,
-            StandardMaster.status == 1,
-        ).order_by(StandardMaster.id.asc()).all()
-        return candidates[0] if candidates else None
+        key = (
+            row["sdo_id"],
+            metadata.replacement_standardno,
+            metadata.replacement_year,
+        )
+        cache = self._memo("ieee_replacement")
+        if key in cache:
+            return cache[key]
+
+        candidates = self.enrichment_repository.find_visible_ieee_replacement(
+            row["sdo_id"],
+            metadata.replacement_standardno,
+            metadata.replacement_year,
+        )
+        selected = candidates[0] if candidates else None
+        cache[key] = selected
+        return selected
 
     @staticmethod
     def _normalized_identifier_prefix(value):

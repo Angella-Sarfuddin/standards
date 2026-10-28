@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Text, JSON, TIMESTAMP
-from app.db.database import Base
+from app.database.database import Base
 
 
 class SDO(Base):

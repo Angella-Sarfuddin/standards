@@ -4,13 +4,13 @@ from dataclasses import dataclass
 import pandas as pd
 
 from app.services.extractors.base_extractor import BaseExtractor
-from app.utils.legacy_office import (
+from app.core.legacy_office import (
     OfficeConversionError,
     OfficeConversionUnavailable,
     converted_office_file,
 )
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_identity import parse_identity
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_identity import parse_identity
 
 
 @dataclass

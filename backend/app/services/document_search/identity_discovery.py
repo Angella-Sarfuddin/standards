@@ -1,6 +1,6 @@
 """Identity-hint candidate discovery for document searches."""
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     canonicalize_search_request,
     identity_index_cores,
     identity_lookup_core_tokens,
@@ -9,7 +9,7 @@ from app.utils.standard_identity import (
     normalize_tokens,
     parse_identity,
 )
-from app.utils.standard_expression_parser import StandardExpressionParser
+from app.core.standard_expression_parser import StandardExpressionParser
 
 
 def candidate_sdo_names(sdo_name, displaystdno, *, service_class):
@@ -125,6 +125,7 @@ def build_identity_candidate_index(candidates, rows):
             ).add(sdo_name)
 
     index = {}
+    parsed_identities = {}
 
     for candidate in candidates:
         sdo_names = sdo_names_by_id.get(
@@ -140,10 +141,13 @@ def build_identity_candidate_index(candidates, rows):
                 if not value:
                     continue
 
-                candidate_identity = parse_identity(
-                    sdo_name,
-                    value,
-                )
+                identity_key = (sdo_name, value)
+                if identity_key not in parsed_identities:
+                    parsed_identities[identity_key] = parse_identity(
+                        sdo_name,
+                        value,
+                    )
+                candidate_identity = parsed_identities[identity_key]
                 candidate_core = normalize_identity_core(
                     candidate_identity.get("core_number")
                     or candidate_identity.get("core")

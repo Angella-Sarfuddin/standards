@@ -1,5 +1,7 @@
 import re
 
+from app.core.normalizer import alphanumeric_upper
+
 
 # The API catalogue links some publications to broad cross-topic groups as
 # well as their specific subject category. Keep the catalogue category that
@@ -18,9 +20,12 @@ API_PREFERRED_CLASSIFICATIONS = {
 }
 
 
-def filter_api_classifications(standard_number, classifications):
+def filter_api_classifications(
+    standard_number: object,
+    classifications: list[dict] | None,
+) -> list[dict]:
     """Return only the relevant API category for known multi-category rows."""
-    number = re.sub(r"[^A-Z0-9]", "", str(standard_number or "").upper())
+    number = alphanumeric_upper(standard_number)
     number = re.sub(r"(?:19|20)\d{2}.*$", "", number)
     number = re.sub(r"(?:STANDARD)?REVISIONTRACKER$", "", number)
     preferred_code = API_PREFERRED_CLASSIFICATIONS.get(number)

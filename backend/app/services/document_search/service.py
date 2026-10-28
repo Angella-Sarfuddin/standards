@@ -1,6 +1,9 @@
 """Search orchestration. The other class methods live in service_methods.py."""
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 from app.repositories.enrichment_repository import EnrichmentRepository
 from app.repositories.standards_repository import StandardsRepository
@@ -25,6 +28,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
         self.repository = StandardsRepository(db)
         self.search_service = SearchService(self.repository)
         self.enrichment_repository = EnrichmentRepository(db)
+        self._search_memos = {}
 
     # ============================================================
     # MAIN SEARCH
@@ -36,7 +40,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
         if not rows:
             return []
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] START | rows={len(rows)}"
         )
 
@@ -78,7 +82,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
             if tema_id:
                 sdo_map["TEMA"] = tema_id
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] SDO resolution: "
             f"{time.perf_counter() - stage_started:.3f}s"
         )
@@ -99,7 +103,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
             request_identity_key=self._request_identity_key,
         )
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] Row preparation: "
             f"{time.perf_counter() - stage_started:.3f}s"
         )
@@ -119,7 +123,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
             )
         )
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] Display lookup: "
             f"{time.perf_counter() - stage_started:.3f}s"
         )
@@ -141,7 +145,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
             self._row_has_display_candidates,
         )
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] Exact/normalized lookup: "
             f"{time.perf_counter() - stage_started:.3f}s"
         )
@@ -200,7 +204,7 @@ class DocumentSearchService(DocumentSearchServiceMethods):
             unresolved
         )
 
-        print(
+        logger.info(
             f"[SEARCH TIMING] Master fallback: "
             f"{time.perf_counter() - stage_started:.3f}s"
         )

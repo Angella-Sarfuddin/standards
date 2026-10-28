@@ -2,7 +2,7 @@
 
 import re
 
-from app.utils.standard_identity import (
+from app.core.standard_identity import (
     normalize_identity_core,
     parse_identity,
     standard_number_year,

@@ -2,9 +2,9 @@
 
 import re
 
-from app.utils.standard_formatter import build_full_display_number, remove_draft_marker
-from app.utils.standard_expression_parser import StandardExpressionParser
-from app.utils.standard_identity import (
+from app.core.standard_formatter import build_full_display_number, remove_draft_marker
+from app.core.standard_expression_parser import StandardExpressionParser
+from app.core.standard_identity import (
     canonicalize_search_request,
     normalize_identity_core,
     normalize_tokens,
@@ -254,6 +254,10 @@ def prepare_input_rows(
                 ),
                 "expand_family": expand_family,
                 "request_key": request_key,
+                "normalized_variants": [
+                    normalize_tokens(variant)
+                    for variant in identity.get("variants", [])
+                ],
                 # Preserve separate Excel line items through the final
                 # response even when they resolve to one catalog record.
                 "source_request_identity": (

@@ -4,13 +4,19 @@ import weakref
 
 from sqlalchemy import or_
 
-from app.repositories.identity_lookup import fetch_long_core_candidates
-from app.utils.db_retry import run_with_retry
+from app.repositories.identity_lookup import (
+    BOUND_PATTERN_BATCH,
+    IN_BATCH_SIZE,
+    fetch_long_core_candidates,
+    iter_batches,
+    keep_rows_containing_core,
+    unique_rows_by_id,
+)
+from app.core.db_retry import run_with_retry
 
 from app.models.standard import Standard
 from app.models.sdo import SDO
-from app.utils.standard_identity import (
-    identity_core_appears,
+from app.core.standard_identity import (
     identity_discovery_terms,
     normalize_tokens,
 )
@@ -158,22 +164,8 @@ class StandardsRepository:
         results = []
         seen = set()
 
-        chunk_size = 400
-
         for sdo_id, display_numbers in grouped.items():
-
-            values = list(display_numbers)
-
-            for start in range(
-                0,
-                len(values),
-                chunk_size
-            ):
-
-                batch = values[
-                    start:start + chunk_size
-                ]
-
+            for batch in iter_batches(display_numbers, IN_BATCH_SIZE):
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
@@ -183,14 +175,7 @@ class StandardsRepository:
                             Standard.display_stdNo.in_(batch),
                         ),
                 )
-
-                for row in rows:
-
-                    if row.id in seen:
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(unique_rows_by_id(rows, seen))
 
         return results
 
@@ -243,7 +228,7 @@ class StandardsRepository:
 
         results = []
         seen = set()
-        bound_chunk = 5
+        text_columns = ("display_stdNo", "standardno")
 
         for (sdo_id, _prefix), bucket in grouped.items():
             cores_in_batch = list(bucket["containment"])
@@ -260,41 +245,25 @@ class StandardsRepository:
                 fulltext_column=Standard.display_stdNo,
                 normalized_column=Standard.stdNo_normalized,
             )
-            for row in rows:
-                if row.id in seen:
-                    continue
-
-                display_value = str(row.display_stdNo or "").strip()
-                standard_value = str(row.standardno or "").strip()
-                normalized_value = str(
-                    row.stdNo_normalized or ""
-                ).strip()
-                if not any(
-                    identity_core_appears(display_value, core)
-                    or identity_core_appears(standard_value, core)
-                    or identity_core_appears(normalized_value, core)
-                    for core in cores_in_batch
-                ):
-                    continue
-
-                seen.add(row.id)
-                results.append(row)
+            results.extend(
+                keep_rows_containing_core(
+                    rows,
+                    cores_in_batch,
+                    (*text_columns, "stdNo_normalized"),
+                    seen,
+                )
+            )
 
             bound_items = list(bucket["bound"].items())
-            for start in range(0, len(bound_items), bound_chunk):
-                batch = bound_items[start:start + bound_chunk]
+            for batch in iter_batches(bound_items, BOUND_PATTERN_BATCH):
                 filters = []
                 cores_in_batch = []
 
                 for core, pattern_set in batch:
                     cores_in_batch.append(core)
                     for pattern in pattern_set:
-                        filters.append(
-                            Standard.display_stdNo.like(pattern)
-                        )
-                        filters.append(
-                            Standard.standardno.like(pattern)
-                        )
+                        filters.append(Standard.display_stdNo.like(pattern))
+                        filters.append(Standard.standardno.like(pattern))
 
                 if not filters:
                     continue
@@ -309,22 +278,14 @@ class StandardsRepository:
                         )
                     ),
                 )
-
-                for row in rows:
-                    if row.id in seen:
-                        continue
-
-                    display_value = str(row.display_stdNo or "").strip()
-                    standard_value = str(row.standardno or "").strip()
-                    if not any(
-                        identity_core_appears(display_value, core)
-                        or identity_core_appears(standard_value, core)
-                        for core in cores_in_batch
-                    ):
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(
+                    keep_rows_containing_core(
+                        rows,
+                        cores_in_batch,
+                        text_columns,
+                        seen,
+                    )
+                )
 
         return results
 
