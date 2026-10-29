@@ -3,7 +3,6 @@
 import re
 
 from app.core.standard_identity import (
-    bis_names_another_standard,
     extract_international_references,
     parse_identity,
     standard_number_year,
@@ -101,8 +100,7 @@ def _master_ids_with_usable_price(masters, prices, sdo_title_map):
         if exact_price not in (None, 0):
             usable.add(master.id)
         elif (
-            sdo_name != "BIS"
-            and exact_price == 0
+            exact_price == 0
             and not _AMENDMENT_DESIGNATION.search(designation)
         ):
             usable.add(master.id)
@@ -536,33 +534,14 @@ def build_enrichment_map(
                 international_price_by_standard[master.Standard_id] = resolved
                 break
 
-    bis_india_price_by_part = {}
-    for priced_master in masters_by_id.values():
-        if str(sdo_title_map.get(priced_master.sdo_id) or "").strip().upper() != "BIS":
-            continue
-        amount = direct_price_by_master.get(priced_master.id)
-        if amount in (None, 0):
-            continue
-        priced_identity = price_identity(priced_master)
-        part_key = priced_identity[:3]
-        year = priced_identity[3] or 0
-        current = bis_india_price_by_part.get(part_key)
-        if current is None or year >= current[0]:
-            bis_india_price_by_part[part_key] = (year, amount)
-
     price_map = {}
     for master in masters:
         identity = price_identity(master)
-        sdo_name = str(
-            sdo_title_map.get(master.sdo_id) or ""
-        ).strip().upper()
         designation = _designation_text(
             master,
             adoption_text_by_standard_id,
         )
         exact_price = direct_price_by_master.get(master.id)
-        names_another_standard = bis_names_another_standard(designation)
-        india_price = bis_india_price_by_part.get(identity[:3])
         has_amendment_designation = bool(
             re.search(
                 r"(?i)(?:\+|/|\s)\s*"
@@ -570,35 +549,15 @@ def build_enrichment_map(
                 designation,
             )
         )
-        if sdo_name == "BIS" and not names_another_standard:
-            # A plain IS number has no price. Do not copy another BIS alias.
-            value = 0
-        elif sdo_name == "BIS" and exact_price not in (None, 0):
+        if exact_price not in (None, 0):
+            # The matched catalogue record's own price is authoritative.
+            # A duplicate edition/format alias can have a different price
+            # and must not overwrite this exact value.
             value = exact_price
-        elif sdo_name == "BIS" and names_another_standard and identity in price_by_identity:
-            value = price_by_identity[identity]
-        elif sdo_name == "BIS" and names_another_standard and india_price:
-            # The adoption row often stores 0. The India price is on the
-            # BIS catalogue row for the same standard, in rupees.
-            value = india_price[1]
-        elif sdo_name == "BIS":
-            value = 0
-        elif (
-            sdo_name != "BIS"
-            and exact_price not in (None, 0)
-        ):
-            # For non-BIS SDOs, the matched catalogue record's own price
-            # is authoritative. A duplicate edition/format alias can have
-            # a different price and must not overwrite this exact value.
-            value = exact_price
-        elif (
-            sdo_name != "BIS"
-            and exact_price == 0
-            and not has_amendment_designation
-        ):
-            # Preserve true zero-price records, but an amendment row can
-            # carry a placeholder zero while its consolidated/base edition
-            # has the actual catalogue price.
+        elif exact_price == 0 and not has_amendment_designation:
+            # Preserve a listed zero. An amendment row can carry a
+            # placeholder zero while its consolidated/base edition has
+            # the actual catalogue price.
             value = 0
         elif identity in price_by_identity:
             value = price_by_identity[identity]
