@@ -124,7 +124,9 @@ SDO_LOOKUP_ALIASES = {
     "EEC": ("EEC", "GLOBAL"),
 }
 LANGUAGE_SUFFIX_RE = re.compile(
-    r"\s*(?:/\s*EN\s*[-/]\s*FR|\(\s*EN\s*[-/]\s*FR\s*\))\s*$",
+    # The closing parenthesis is optional so a truncated ``(EN-FR`` is the
+    # same edition as ``(EN-FR)`` and is not a different standard number.
+    r"\s*(?:/\s*EN\s*[-/]\s*FR|\(\s*EN\s*[-/]\s*FR\s*\)?)\s*$",
     re.IGNORECASE,
 )
 CORRIGENDUM_RE = re.compile(
@@ -1317,11 +1319,32 @@ def canonicalize_search_request(
         id_name = "AMPP-NACE"
         display = re.sub(r"(?i)^SP\s+", "", display)
 
-    # NACE No. 6 is published as the joint SSPC-SP 13 document.
-    if sdo == "NACE" and re.match(r"(?i)^NO\.?\s*6\b", display):
-        id_name = "AMPP-SSPC"
-
     return sdo, display, id_name
+
+
+def nace_publication_number(sdo_name: str, display_number: str) -> Optional[str]:
+    """The number in a ``NACE No.`` request, when that is the designation.
+
+    ``NACE No. 8`` is that request. A different standard that merely mentions
+    a NACE number in a tail is not.
+    """
+    if normalize_tokens(sdo_name) not in {"NACE", "AMPPNACE"}:
+        return None
+    text = re.sub(r"(?i)^NACE\s+", "", clean(display_number)).strip()
+    match = re.match(r"(?i)^NO\.?\s*(\d+)\b", text)
+    if not match:
+        return None
+    return str(int(match.group(1)))
+
+
+def designation_cites_nace_number(value: str, number: str) -> bool:
+    """True when this catalogue text names this NACE publication number."""
+    if not str(number or "").isdigit():
+        return False
+    return bool(re.search(
+        rf"(?i)\bNACE\s+NO\.?\s*{int(number)}\b",
+        str(value or ""),
+    ))
 
 
 def _roman_numeral_value(value: str) -> Optional[int]:
@@ -1420,6 +1443,9 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         value = SERIES_SUFFIX_RE.sub("", value).rstrip()
 
     body, year = extract_year(value)
+    # A language tag can sit before the year. Remove it from the body so
+    # ``(EN-FR)`` is not glued into the standard number.
+    body = LANGUAGE_SUFFIX_RE.sub("", body).rstrip()
     body = normalize_tokens(body)
 
     # BIS labels such as "IS 2099 Rev 2, 1986" use REV as catalog edition

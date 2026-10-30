@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 from app.services.document_search.selection_context import use_candidate_status_map
 
 from app.core.standard_identity import (
+    designation_cites_nace_number,
+    nace_publication_number,
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
@@ -48,6 +50,37 @@ def assemble_results(
 
     seen = set()
 
+    def _row_nace_number(row):
+        return nace_publication_number(
+            row.get("search_sdo_name") or row.get("sdo_name") or "",
+            " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "displaystdno",
+                    "result_displaystdno",
+                    "full_display_number",
+                )
+            ),
+        )
+
+    def _candidate_serves_request(row, standard):
+        if getattr(standard, "sdo_id", None) == row["sdo_id"]:
+            return True
+        nace_number = _row_nace_number(row)
+        return bool(
+            nace_number
+            and designation_cites_nace_number(
+                " ".join(
+                    str(value or "")
+                    for value in (
+                        getattr(standard, "display_stdNo", ""),
+                        getattr(standard, "standardno", ""),
+                    )
+                ),
+                nace_number,
+            )
+        )
+
     matched_candidates = [
         standard
         for row in unique_prepared_rows.values()
@@ -55,7 +88,7 @@ def assemble_results(
             local_matches.get(row["request_key"], [])
             + master_matches.get(row["request_key"], [])
         )
-        if getattr(standard, "sdo_id", None) == row["sdo_id"]
+        if _candidate_serves_request(row, standard)
     ]
 
     nace_mr0103_overrides = {}
@@ -208,13 +241,13 @@ def assemble_results(
 
         request_candidates = local_standards + master_standards
 
-        # SDO + standard number form one identity. Keep this guard at the
-        # result boundary as well as in the partitioned queries so a
-        # candidate from another catalogue can never be surfaced.
+        # SDO + standard number form one identity. A NACE No. request may
+        # also use a row from the joint catalogue when that row cites the
+        # same NACE number.
         request_candidates = [
             candidate
             for candidate in request_candidates
-            if getattr(candidate, "sdo_id", None) == row["sdo_id"]
+            if _candidate_serves_request(row, candidate)
         ]
 
         official_nace_candidate = nace_mr0103_overrides.get(
@@ -474,10 +507,9 @@ def assemble_results(
                         "and is not available."
                     )
                 reaffirmed_year = (
-                    reaffirmation_year(row["displaystdno"])
-                    or reaffirmation_year(standard.Standard_id or "")
-                    or reaffirmation_year(standard.display_stdNo or "")
+                    reaffirmation_year(standard.display_stdNo or "")
                     or reaffirmation_year(standard.standardno or "")
+                    or reaffirmation_year(standard.Standard_id or "")
                 )
                 if is_match and actual_year is not None:
                     if requested_year is None:

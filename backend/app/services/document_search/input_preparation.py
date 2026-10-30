@@ -258,8 +258,9 @@ def prepare_input_rows(
                     normalize_tokens(variant)
                     for variant in identity.get("variants", [])
                 ],
-                # Preserve separate Excel line items through the final
-                # response even when they resolve to one catalog record.
+                # Remember which worksheet line this request came from so a
+                # resolved line is not also reported missing. Found results
+                # are still collapsed to one row per catalogue standard.
                 "source_request_identity": (
                     (
                         str(

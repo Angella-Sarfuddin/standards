@@ -227,6 +227,10 @@ class DocumentSearchServiceMethods:
     def _candidate_year(candidate, sdo_name):
         return candidate_resolution._candidate_year(candidate, sdo_name)
 
+    @staticmethod
+    def _candidate_reaffirmation_year(candidate):
+        return candidate_resolution._candidate_reaffirmation_year(candidate)
+
     def _official_nace_mr0103_edition(self, row):
         """Prefer AMPP's canonical 2023 MR0103/ISO 17945 catalogue record."""
         requested = " ".join(
@@ -686,6 +690,9 @@ class DocumentSearchServiceMethods:
                     candidate,
                     row.get("search_sdo_name") or row.get("sdo_name") or "TEMA",
                 ) or 0,
+                DocumentSearchService._candidate_reaffirmation_year(
+                    candidate
+                ),
                 int(getattr(candidate, "recent", 0) == 1),
                 int(hasattr(candidate, "standardyear")),
             ),

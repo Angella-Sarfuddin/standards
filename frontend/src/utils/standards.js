@@ -68,13 +68,97 @@ const tcCellText = (code, description) => {
   return name || label || rawCode;
 };
 
+const uniqueLabels = (labels) => {
+  const seen = new Set();
+  const unique = [];
+  labels.forEach((label) => {
+    const key = String(label || "").toLowerCase();
+    if (!key || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    unique.push(label);
+  });
+  return unique;
+};
+
+const committeeDisplayCodes = (code, description, ownerSdo) => {
+  let owner = String(ownerSdo || "").trim().toUpperCase();
+  if (owner === "IS") {
+    owner = "BIS";
+  }
+  if (!["ASTM", "BIS", "BSI", "IEC"].includes(owner)) {
+    return null;
+  }
+  const text = `${description || ""} ${code || ""}`.replace(/\s+/g, " ").trim();
+  if (owner === "BSI") {
+    return uniqueLabels(
+      [...text.matchAll(/(?:^|[^A-Z0-9])(GMB|GBM)\s*0*(\d+[A-Z]?)/gi)].map(
+        (match) => `${match[1].toUpperCase()} ${match[2].toUpperCase()}`
+      )
+    );
+  }
+  if (owner === "BIS") {
+    return uniqueLabels(
+      [...text.matchAll(/(?:^|[^A-Z0-9])([A-Z]{1,4}(?:-[A-Z]{1,4})?)\s+(\d+[A-Z]?)\b/gi)].map(
+        (match) => `${match[1].toUpperCase()} ${match[2].toUpperCase()}`
+      )
+    );
+  }
+  if (owner === "IEC") {
+    const explicit = [
+      ...text.matchAll(
+        /\bTC\s*\d+[A-Z]?(?:\s*\/\s*(?:SC|WG|JWG|AHG|PT)\s*\d+[A-Z]?)*/gi
+      ),
+    ].map((match) =>
+      match[0]
+        .replace(/\bTC\s*/i, "TC ")
+        .replace(/\s*\/\s*/g, "/")
+        .replace(/\b(SC|WG|JWG|AHG|PT)\s*/gi, "$1 ")
+        .replace(/\s+/g, " ")
+        .replace(/\.+$/, "")
+        .trim()
+    );
+    if (explicit.length) {
+      return uniqueLabels(explicit);
+    }
+    const parts = String(code || "")
+      .replace(/\s+/g, "")
+      .split("/")
+      .filter(Boolean);
+    if (parts.length && parts.every((part) => /^\d+[A-Z]?$/i.test(part))) {
+      return [
+        `TC ${parts[0].toUpperCase()}${parts
+          .slice(1)
+          .map((part) => `/SC ${part.toUpperCase()}`)
+          .join("")}`,
+      ];
+    }
+    return [];
+  }
+  return uniqueLabels(
+    [...text.matchAll(/\b(\d{2}\.\d{2})\b/g)].map((match) => match[1])
+  );
+};
+
 export const formatTechnicalCommittee = (result) => {
   const labels = [];
+  const requestedSdo = result?.requested_sdo || result?.sdo_name || "";
   getClassifications(result).forEach((item) => {
-    const label = tcCellText(item?.code, item?.description);
-    if (label && !labels.includes(label)) {
-      labels.push(label);
-    }
+    const codeOnly = committeeDisplayCodes(
+      item?.code,
+      item?.description,
+      item?.owner_sdo || requestedSdo
+    );
+    const nextLabels =
+      codeOnly === null
+        ? [tcCellText(item?.code, item?.description)]
+        : codeOnly;
+    nextLabels.forEach((label) => {
+      if (label && !labels.includes(label)) {
+        labels.push(label);
+      }
+    });
   });
   return labels.join(", ");
 };
@@ -145,19 +229,22 @@ export const deduplicateResultRows = (results) => {
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "");
     const standard = result?.standard || {};
-    const resolved =
-      standard.Standard_id ||
-      standard.id ||
+    const resolved = String(
       standard.display_stdNo ||
-      standard.standardno ||
-      "";
+        standard.standardno ||
+        standard.Standard_id ||
+        standard.id ||
+        ""
+    )
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "");
     const sourceIdentity = result?.source_row_identity;
     const sourceSuffix = sourceIdentity
       ? `:source:${JSON.stringify(sourceIdentity)}`
       : "";
     const key =
       result?.matched && result?.standard
-        ? `found:${sdo}:${request}:${String(resolved).toUpperCase()}${sourceSuffix}`
+        ? `found:${sdo}:${resolved}`
         : `unmatched:${sdo}:${request}:${String(result?.status || "").toUpperCase()}:${String(result?.status_detail || "").toUpperCase()}${sourceSuffix}`;
     if (seen.has(key)) return false;
     seen.add(key);

@@ -22,6 +22,7 @@ from app.models.sdo_classification import SDOClassification
 from app.models.sdo import SDO
 from app.core.standard_identity import (
     adoption_price_like_patterns,
+    designation_cites_nace_number,
     identity_core_appears,
     sdo_identifier_prefixes,
     identity_discovery_terms,
@@ -51,6 +52,60 @@ class EnrichmentRepository:
     # ==========================================
     # SINGLE MASTER STANDARD
     # ==========================================
+
+    def search_nace_publication_rows(self, number):
+        """Rows whose designation names this NACE publication number.
+
+        The number is taken from the request. A joint SSPC row such as
+        ``SSPC-SP 14-2007-NACE No. 8`` qualifies because it cites that
+        number, as does a row filed as ``NACE No. 8``.
+        """
+        if not str(number or "").isdigit():
+            return []
+        cited_number = str(int(number))
+        sdo_rows = run_with_retry(
+            self.db,
+            lambda: self.db.query(SDO.id).filter(
+                SDO.sdo_title.in_((
+                    "AMPP-NACE",
+                    "AMPP-SSPC",
+                    "NACE",
+                    "SSPC",
+                ))
+            ),
+        )
+        sdo_ids = [row.id for row in sdo_rows]
+        if not sdo_ids:
+            return []
+        spellings = (
+            f"NACE NO. {cited_number}",
+            f"NACE NO {cited_number}",
+            f"NACE NO.{cited_number}",
+        )
+        filters = [
+            field.like(pattern)
+            for field in (
+                StandardMaster.display_stdNo,
+                StandardMaster.standardno,
+            )
+            for spelling in spellings
+            for pattern in (f"{spelling}%", f"%{spelling}%")
+        ]
+        rows = run_with_retry(
+            self.db,
+            lambda: self.db.query(StandardMaster).filter(
+                StandardMaster.sdo_id.in_(sdo_ids),
+                self._master_searchable_filter(),
+                or_(*filters),
+            ),
+        )
+        return [
+            row for row in rows
+            if designation_cites_nace_number(
+                f"{row.display_stdNo or ''} {row.standardno or ''}",
+                cited_number,
+            )
+        ]
 
     def get_master_standard(self, standard_id):
         return (

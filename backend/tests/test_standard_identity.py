@@ -86,6 +86,20 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
+    def test_unclosed_language_suffix_is_the_same_edition(self):
+        closed = parse_identity("IEC", "IEC 62305-1:2024 (EN-FR)")
+        unclosed = parse_identity("IEC", "IEC 62305-1:2024 (EN-FR")
+        before_year = parse_identity("IEC", "IEC 62305-1 (EN-FR) : 2024")
+
+        self.assertEqual(unclosed["year"], 2024)
+        self.assertEqual(unclosed["qualifier"], closed["qualifier"])
+        self.assertEqual(unclosed["core_number"], closed["core_number"])
+        self.assertEqual(before_year["year"], 2024)
+        self.assertEqual(before_year["qualifier"], closed["qualifier"])
+        self.assertTrue(
+            identity_matches(unclosed, closed, check_year=False)
+        )
+
     def test_search_can_fall_back_to_latest_stored_edition(self):
         row = {
             "sdo_name": "IEC",

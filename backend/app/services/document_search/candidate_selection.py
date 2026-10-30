@@ -127,6 +127,7 @@ def _select_series_candidates(candidates, row, status_map=None, *, service_class
                         row.get("search_sdo_name") or row["sdo_name"],
                     )
                     or 0,
+                    service_class._candidate_reaffirmation_year(candidate),
                     int(getattr(candidate, "recent", 0) or 0),
                     str(getattr(candidate, "id", "")),
                 ),
@@ -244,7 +245,10 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
                 )
                 or 0
             )
-            score = (year,)
+            score = (
+                year,
+                service_class._candidate_reaffirmation_year(candidate),
+            )
             current = latest_by_member.get(member)
             if current is None or score > current[0]:
                 latest_by_member[member] = (score, candidate)
@@ -280,13 +284,16 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
             )
             == requested_prefix
         )
+        # A later reaffirmation of the same edition outranks an older
+        # one. Publication year still decides before that review year.
+        reaffirmed = service_class._candidate_reaffirmation_year(candidate)
         # API catalogues can use a different prefix for a newer edition
         # (for example API versus ANSI/API). Let the publication year
         # decide first, with the exact prefix as a tie-breaker.
         score = (
-            (year, exact_prefix)
+            (year, reaffirmed, exact_prefix)
             if service_class._is_api_request(row)
-            else (exact_prefix, year)
+            else (exact_prefix, year, reaffirmed)
         )
 
         if (
@@ -417,6 +424,7 @@ def _select_master_candidate(
                 candidate,
                 row.get("search_sdo_name") or row["sdo_name"],
             ) or 0,
+            service_class._candidate_reaffirmation_year(candidate),
             int(getattr(candidate, "DocumentAvailability", 1) == 1),
             int(getattr(candidate, "recent", 0) == 1),
         ),
@@ -564,7 +572,10 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
                 )
                 or 0
             )
-            score = (year,)
+            score = (
+                year,
+                service_class._candidate_reaffirmation_year(candidate),
+            )
             current = latest_by_member.get(member)
             if current is None or score > current[0]:
                 latest_by_member[member] = (score, candidate)
@@ -599,6 +610,7 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
         year = candidate.standardyear or standard_number_year(
             candidate.standardno
         ) or 0
+        reaffirmed = service_class._candidate_reaffirmation_year(candidate)
         exact_prefix = int(
             service_class._normalized_identifier_prefix(
                 candidate_identity.get("identifier_prefix") or ""
@@ -609,9 +621,9 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
         # edition (for example API versus ANSI/API). Let the year decide
         # first, with an exact prefix as a tie-breaker.
         score = (
-            (year, exact_prefix)
+            (year, reaffirmed, exact_prefix)
             if service_class._is_api_request(row)
-            else (exact_prefix, year)
+            else (exact_prefix, year, reaffirmed)
         )
 
         if (

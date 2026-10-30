@@ -13,6 +13,116 @@ _AMENDMENT_DESIGNATION = re.compile(
     r"(?i)(?:\+|/|\s)\s*"
     r"(?:AMD\.?|AMEND(?:MENT)?\.?|AMENDMENT)\s*[-.:#]?\s*\d+"
 )
+_CODE_ONLY_COMMITTEE_OWNERS = {"ASTM", "BIS", "BSI", "IEC", "IS"}
+
+
+def _unique_labels(labels):
+    unique = []
+    seen = set()
+    for label in labels:
+        key = str(label or "").casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(label)
+    return unique
+
+
+def _normalize_tc_path(value):
+    text = re.sub(r"(?i)\bTC\s*", "TC ", str(value or ""))
+    text = re.sub(r"\s*/\s*", "/", text)
+    text = re.sub(r"(?i)\b(SC|WG|JWG|AHG|PT)\s*", r"\1 ", text)
+    return re.sub(r"\s+", " ", text).strip().rstrip(".")
+
+
+def committee_display_codes(code, description, owner_sdo):
+    """Committee codes only, for publishers whose TC cell must omit titles.
+
+    Returns None for every other publisher so their existing labels stay.
+    An empty list means this publisher has no committee code in the text.
+    Several codes are all returned.
+    """
+    owner = str(owner_sdo or "").strip().upper()
+    if owner == "IS":
+        owner = "BIS"
+    if owner not in _CODE_ONLY_COMMITTEE_OWNERS:
+        return None
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        " ".join(
+            part
+            for part in (str(description or ""), str(code or ""))
+            if str(part or "").strip()
+        ),
+    ).strip()
+    if owner == "BSI":
+        return _unique_labels(
+            f"{letters.upper()} {number.upper()}"
+            for letters, number in re.findall(
+                r"(?i)(?<![A-Z0-9])(GMB|GBM)\s*0*(\d+[A-Z]?)",
+                text,
+            )
+        )
+    if owner == "BIS":
+        return _unique_labels(
+            f"{letters.upper()} {number.upper()}"
+            for letters, number in re.findall(
+                r"(?i)(?<![A-Z0-9])([A-Z]{1,4}(?:-[A-Z]{1,4})?)\s+(\d+[A-Z]?)\b",
+                text,
+            )
+        )
+    if owner == "IEC":
+        explicit = [
+            _normalize_tc_path(match)
+            for match in re.findall(
+                r"(?i)\bTC\s*\d+[A-Z]?"
+                r"(?:\s*/\s*(?:SC|WG|JWG|AHG|PT)\s*\d+[A-Z]?)*",
+                text,
+            )
+        ]
+        if explicit:
+            return _unique_labels(explicit)
+        parts = [
+            part
+            for part in re.sub(r"\s+", "", str(code or "")).split("/")
+            if part
+        ]
+        if parts and all(
+            re.fullmatch(r"\d+[A-Z]?", part, re.IGNORECASE) for part in parts
+        ):
+            label = f"TC {parts[0].upper()}"
+            for part in parts[1:]:
+                label += f"/SC {part.upper()}"
+            return [label]
+        return []
+    volumes = re.findall(r"(?i)\b(\d{2}\.\d{2})\b", text)
+    return _unique_labels(volumes)
+
+
+def _code_only_committee_rows(items, sdo_title):
+    rows = []
+    seen = set()
+    for item in items or []:
+        owner = item.get("owner_sdo") or sdo_title
+        labels = committee_display_codes(
+            item.get("code"),
+            item.get("description"),
+            owner,
+        )
+        if labels is None:
+            rows.append(item)
+            continue
+        for label in labels:
+            key = label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({**item, "code": label, "description": ""})
+    return rows
+
+
 _VARIANT_COPY_RE = re.compile(
     r"(?i)(?:^|[^A-Z0-9])"
     r"(?:CMV|RLV|REDLINE|CSV|AMD\d*|AMEND(?:MENT)?|CORR(?:IGENDUM)?|COR\d*)"
@@ -866,6 +976,11 @@ def build_enrichment_map(
                     }
                 )
             classifications_for_standard = ieee_classifications
+        if sdo_title in {"astm", "bis", "bsi", "iec"}:
+            classifications_for_standard = _code_only_committee_rows(
+                classifications_for_standard,
+                sdo_title,
+            )
 
         result[
             standard.Standard_id

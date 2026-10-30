@@ -6,6 +6,7 @@ from app.core.standard_identity import (
     identity_matches,
     normalize_identity_core,
     parse_identity,
+    reaffirmation_year,
     standard_number_year,
 )
 
@@ -88,12 +89,16 @@ def _select_candidate(
                 )
                 or 0
             )
+            reaffirmed = service_class._candidate_reaffirmation_year(
+                candidate
+            )
             if service_class._is_api_request(row):
                 # API records may carry alternate prefixes across
                 # editions (for example API versus ANSI/API). Select the
                 # newest matching edition before using prefix as a tie-breaker.
                 return (
                     year,
+                    reaffirmed,
                     int(getattr(candidate, "DocumentAvailability", 1) == 1),
                     exact_prefix,
                     int(getattr(candidate, "recent", 0) == 1),
@@ -102,6 +107,7 @@ def _select_candidate(
             return (
                 exact_prefix,
                 year,
+                reaffirmed,
                 int(getattr(candidate, "DocumentAvailability", 1) == 1),
                 int(getattr(candidate, "recent", 0) == 1),
                 int(hasattr(candidate, "standardyear")),
@@ -232,9 +238,13 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         has_document = int(
             getattr(candidate, "DocumentAvailability", 1) == 1
         )
+        reaffirmed = service_class._candidate_reaffirmation_year(
+            candidate
+        )
         if service_class._is_api_request(row):
             return (
                 year,
+                reaffirmed,
                 has_document,
                 exact_prefix,
                 recent,
@@ -243,6 +253,7 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         return (
             exact_prefix,
             year,
+            reaffirmed,
             has_document,
             recent,
             is_master_record,
@@ -261,6 +272,21 @@ def _candidate_year(candidate, sdo_name):
     return (
         candidate_identity.get("year")
         or standard_number_year(candidate.standardno)
+    )
+
+
+def _candidate_reaffirmation_year(candidate):
+    """Newer review of the same edition, from the catalogue text.
+
+    ``(R2026)``, ``Reaffirmed 2026``, and the same markers on any
+    publisher outrank an older review. A row with no review year stays
+    at zero so it cannot outrank a dated reaffirmation of that edition.
+    """
+    return (
+        reaffirmation_year(getattr(candidate, "display_stdNo", None) or "")
+        or reaffirmation_year(getattr(candidate, "standardno", None) or "")
+        or reaffirmation_year(getattr(candidate, "Standard_id", None) or "")
+        or 0
     )
 
 def _normalized_identifier_prefix(value):
