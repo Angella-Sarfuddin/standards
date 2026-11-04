@@ -9,6 +9,7 @@ from app.services.document_search.selection_context import use_candidate_status_
 from app.core.standard_identity import (
     identity_lookup_core_tokens,
     identity_pattern_prefix,
+    nace_publication_number,
     normalize_identity_core,
     normalize_tokens,
 )
@@ -285,6 +286,38 @@ def find_master_matches(
     # Select master for each unresolved row
     # --------------------------------------------------------
 
+    joint_nace_rows = {}
+    for row in unresolved_rows:
+        nace_number = nace_publication_number(
+            row.get("search_sdo_name") or row.get("sdo_name") or "",
+            " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "displaystdno",
+                    "result_displaystdno",
+                    "full_display_number",
+                )
+            ),
+        )
+        if not nace_number or nace_number in joint_nace_rows:
+            continue
+        joint_nace_rows[nace_number] = (
+            enrichment_repository.search_nace_publication_rows(
+                nace_number
+            )
+        )
+    joint_status_ids = {
+        getattr(candidate, "status_id", None)
+        for candidates in joint_nace_rows.values()
+        for candidate in candidates
+    } - set(master_status_map)
+    if joint_status_ids:
+        master_status_map.update(
+            enrichment_repository.get_standard_status_map(
+                joint_status_ids
+            )
+        )
+
     matches = {}
     master_identity_index = (
         build_identity_candidate_index(
@@ -359,6 +392,20 @@ def find_master_matches(
                     candidates.append(
                         master
                     )
+
+        nace_number = nace_publication_number(
+            row.get("search_sdo_name") or row.get("sdo_name") or "",
+            " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "displaystdno",
+                    "result_displaystdno",
+                    "full_display_number",
+                )
+            ),
+        )
+        if nace_number:
+            candidates.extend(joint_nace_rows.get(nace_number, []))
 
         if is_tema_edition_request(row):
             latest_tema_edition = tema_latest_by_sdo.get(row.get("sdo_id"))

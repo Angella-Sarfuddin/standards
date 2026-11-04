@@ -10,6 +10,9 @@ from openpyxl.utils import get_column_letter
 from app.services.grouping_service import GroupingService
 from app.core.api_classification_filter import filter_api_classifications
 from app.core.standard_identity import bis_names_another_standard
+from app.services.document_search.enrichment_builder import (
+    committee_display_codes,
+)
 
 
 class ExportService:
@@ -143,6 +146,20 @@ class ExportService:
                 if not code and not description or key in seen_classifications:
                     continue
                 seen_classifications.add(key)
+                owner = (
+                    classification.get("owner_sdo")
+                    or result.get("requested_sdo")
+                )
+                code_only = committee_display_codes(
+                    code,
+                    description,
+                    owner,
+                )
+                if code_only is not None:
+                    for label in code_only:
+                        if label not in tc_descriptions:
+                            tc_descriptions.append(label)
+                    continue
                 tc_text = ExportService._tc_cell_text(code, description)
                 if tc_text and tc_text not in tc_descriptions:
                     tc_descriptions.append(tc_text)
@@ -874,8 +891,10 @@ class ExportService:
         alternate_fill = PatternFill("solid", fgColor="F3F6FA")
         available_fill = PatternFill("solid", fgColor="E4F4EA")
         warning_fill = PatternFill("solid", fgColor="FFF1D6")
-        bottom_border = Border(
-            bottom=Side(style="thin", color="DFE5ED")
+        cell_divider = Border(
+            left=Side(style="thin", color="D5DCE5"),
+            right=Side(style="thin", color="D5DCE5"),
+            bottom=Side(style="medium", color="C5CED8"),
         )
         wrap_headers = {
             "title",
@@ -915,7 +934,7 @@ class ExportService:
                         vertical="top",
                         wrap_text=header in wrap_headers,
                     )
-                    cell.border = bottom_border
+                    cell.border = cell_divider
                     if row_index % 2 == 0:
                         cell.fill = alternate_fill
                     if cell.value is not None:

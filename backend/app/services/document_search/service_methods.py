@@ -11,7 +11,6 @@ import time
 from app.repositories.standards_repository import StandardsRepository
 from app.repositories.enrichment_repository import EnrichmentRepository
 from app.services.search_service import SearchService
-from app.services.ieee_official_metadata import IEEEOfficialMetadataService
 from app.services.document_search import candidate_resolution
 from app.services.document_search import candidate_filtering
 from app.services.document_search import family_paths
@@ -228,6 +227,10 @@ class DocumentSearchServiceMethods:
     def _candidate_year(candidate, sdo_name):
         return candidate_resolution._candidate_year(candidate, sdo_name)
 
+    @staticmethod
+    def _candidate_reaffirmation_year(candidate):
+        return candidate_resolution._candidate_reaffirmation_year(candidate)
+
     def _official_nace_mr0103_edition(self, row):
         """Prefer AMPP's canonical 2023 MR0103/ISO 17945 catalogue record."""
         requested = " ".join(
@@ -309,33 +312,6 @@ class DocumentSearchServiceMethods:
                 break
 
         cache[sdo_id] = selected
-        return selected
-
-    def _official_ieee_replacement(self, row, metadata=None):
-        """Return the active catalogue row for a verified IEEE target."""
-        metadata = metadata or IEEEOfficialMetadataService.lookup(
-            row.get("search_sdo_name") or row.get("sdo_name"),
-            row.get("result_displaystdno") or row.get("displaystdno"),
-        )
-        if metadata is None or not row.get("sdo_id"):
-            return None
-
-        key = (
-            row["sdo_id"],
-            metadata.replacement_standardno,
-            metadata.replacement_year,
-        )
-        cache = self._memo("ieee_replacement")
-        if key in cache:
-            return cache[key]
-
-        candidates = self.enrichment_repository.find_visible_ieee_replacement(
-            row["sdo_id"],
-            metadata.replacement_standardno,
-            metadata.replacement_year,
-        )
-        selected = candidates[0] if candidates else None
-        cache[key] = selected
         return selected
 
     @staticmethod
@@ -714,6 +690,9 @@ class DocumentSearchServiceMethods:
                     candidate,
                     row.get("search_sdo_name") or row.get("sdo_name") or "TEMA",
                 ) or 0,
+                DocumentSearchService._candidate_reaffirmation_year(
+                    candidate
+                ),
                 int(getattr(candidate, "recent", 0) == 1),
                 int(hasattr(candidate, "standardyear")),
             ),
