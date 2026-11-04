@@ -354,8 +354,25 @@ class CommitteeCodeDisplayTests(unittest.TestCase):
             ),
             ["01.01"],
         )
-        self.assertIsNone(
-            committee_display_codes("65", "ISO/TC 65", "ISO")
+        self.assertEqual(
+            committee_display_codes(
+                "28/5",
+                "Measurement of refrigerated hydrocarbon (ISO/TC 28/SC 5.)",
+                "ISO",
+            ),
+            ["ISO/TC 28/SC 5"],
+        )
+        self.assertEqual(
+            committee_display_codes("07", "Pipeline Transportation", "API"),
+            ["Pipeline Transportation"],
+        )
+        self.assertEqual(
+            committee_display_codes(
+                "15",
+                "Pipelines & Tanks (SC 15)",
+                "AMPP-NACE",
+            ),
+            ["15"],
         )
 
 

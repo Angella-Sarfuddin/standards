@@ -249,6 +249,53 @@ def assemble_results(
             for candidate in request_candidates
             if _candidate_serves_request(row, candidate)
         ]
+        if service._is_api_request(row) and request_candidates:
+            active_base_keys = {
+                (
+                    service._candidate_year(candidate, "API"),
+                    normalize_identity_core(
+                        parse_identity(
+                            "API",
+                            candidate.display_stdNo
+                            or candidate.standardno
+                            or "",
+                        ).get("core_number")
+                        or ""
+                    ),
+                )
+                for candidate in request_candidates
+                if (
+                    service._candidate_catalog_visibility(
+                        candidate,
+                        status_map,
+                    ) is True
+                    and service._candidate_reaffirmation_year(candidate) == 0
+                )
+            }
+            if active_base_keys:
+                request_candidates = [
+                    candidate
+                    for candidate in request_candidates
+                    if (
+                        service._candidate_catalog_visibility(
+                            candidate,
+                            status_map,
+                        ) is True
+                        or (
+                            service._candidate_year(candidate, "API"),
+                            normalize_identity_core(
+                                parse_identity(
+                                    "API",
+                                    candidate.display_stdNo
+                                    or candidate.standardno
+                                    or "",
+                                ).get("core_number")
+                                or ""
+                            ),
+                        )
+                        not in active_base_keys
+                    )
+                ]
 
         official_nace_candidate = nace_mr0103_overrides.get(
             row["request_key"]
@@ -340,6 +387,13 @@ def assemble_results(
                         status_info,
                         standard,
                     )
+                    if (
+                        service._is_api_request(row)
+                        and status_info
+                        and str(status_info.get("name") or "").upper()
+                        == "ACTIVE"
+                    ):
+                        status, is_match = "AVAILABLE", True
                     data["catalog_status"] = (
                         status_info.get("name")
                         if status_info

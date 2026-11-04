@@ -891,8 +891,10 @@ class ExportService:
         alternate_fill = PatternFill("solid", fgColor="F3F6FA")
         available_fill = PatternFill("solid", fgColor="E4F4EA")
         warning_fill = PatternFill("solid", fgColor="FFF1D6")
-        bottom_border = Border(
-            bottom=Side(style="thin", color="DFE5ED")
+        cell_divider = Border(
+            left=Side(style="thin", color="D5DCE5"),
+            right=Side(style="thin", color="D5DCE5"),
+            bottom=Side(style="medium", color="C5CED8"),
         )
         wrap_headers = {
             "title",
@@ -932,7 +934,7 @@ class ExportService:
                         vertical="top",
                         wrap_text=header in wrap_headers,
                     )
-                    cell.border = bottom_border
+                    cell.border = cell_divider
                     if row_index % 2 == 0:
                         cell.fill = alternate_fill
                     if cell.value is not None:

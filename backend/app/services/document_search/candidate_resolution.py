@@ -400,6 +400,7 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
 
     unavailable_cores = {core for core, _year in unavailable_editions}
     dated_available_cores = set()
+    active_base_editions = set()
     for candidate in candidates:
         status_info = status_map.get(
             getattr(candidate, "status_id", None)
@@ -426,6 +427,14 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
         year = service_class._candidate_year(candidate, "API") or None
         if core in unavailable_cores and year is not None:
             dated_available_cores.add(core)
+            if (
+                service_class._candidate_catalog_visibility(
+                    candidate,
+                    status_map,
+                ) is True
+                and service_class._candidate_reaffirmation_year(candidate) == 0
+            ):
+                active_base_editions.add((core, int(year)))
     yearless_unavailable_cores = unavailable_cores - dated_available_cores
 
     filtered = []
@@ -443,6 +452,28 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
         if service_class._status_label_is_unavailable(
             lifecycle_status
         ):
+            identity = parse_identity(
+                "API",
+                getattr(candidate, "display_stdNo", "")
+                or getattr(candidate, "standardno", ""),
+            )
+            core = normalize_identity_core(
+                identity.get("core_number") or identity.get("core") or ""
+            )
+            year = service_class._candidate_year(candidate, "API") or None
+            requested_reaffirmation = reaffirmation_year(
+                str(row.get("displaystdno") or "")
+            )
+            if (
+                requested_reaffirmation is None
+                and core
+                and year is not None
+                and (core, int(year)) in active_base_editions
+            ):
+                # A reaffirmation/review row may be withdrawn while the
+                # catalogue's clean base edition remains active. For an
+                # unversioned API request, the active base is authoritative.
+                continue
             filtered.append(candidate)
             continue
         identity = parse_identity(
@@ -463,6 +494,9 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
             # They cannot represent the current edition.
             continue
         if core in yearless_unavailable_cores and year is None:
+            continue
+        if core and year is not None and (core, int(year)) in active_base_editions:
+            filtered.append(candidate)
             continue
         if core and (core, int(year) if year is not None else None) in unavailable_editions:
             continue

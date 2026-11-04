@@ -13,7 +13,17 @@ _AMENDMENT_DESIGNATION = re.compile(
     r"(?i)(?:\+|/|\s)\s*"
     r"(?:AMD\.?|AMEND(?:MENT)?\.?|AMENDMENT)\s*[-.:#]?\s*\d+"
 )
-_CODE_ONLY_COMMITTEE_OWNERS = {"ASTM", "BIS", "BSI", "IEC", "IS"}
+_CODE_ONLY_COMMITTEE_OWNERS = {
+    "API",
+    "ASTM",
+    "BIS",
+    "BSI",
+    "IEC",
+    "IS",
+    "ISO",
+    "AMPP-NACE",
+    "NACE",
+}
 
 
 def _unique_labels(labels):
@@ -57,6 +67,32 @@ def committee_display_codes(code, description, owner_sdo):
             if str(part or "").strip()
         ),
     ).strip()
+    if owner == "API":
+        return [str(description or "").strip()] if str(description or "").strip() else []
+    if owner in {"AMPP-NACE", "NACE"}:
+        numeric_code = re.search(r"(?<!\d)\d+(?:\.\d+)*(?!\d)", str(code or ""))
+        return [numeric_code.group(0)] if numeric_code else []
+    if owner == "ISO":
+        explicit = [
+            _normalize_tc_path(match)
+            for match in re.findall(
+                r"(?i)\bISO\s*/\s*TC\s*\d+[A-Z]?"
+                r"(?:\s*/\s*(?:SC|WG|JWG|AHG|PT)\s*\d+[A-Z]?)*",
+                text,
+            )
+        ]
+        if explicit:
+            return _unique_labels(explicit)
+        parts = [
+            part for part in re.sub(r"\s+", "", str(code or "")).split("/") if part
+        ]
+        if parts and all(re.fullmatch(r"\d+[A-Z]?", part, re.IGNORECASE) for part in parts):
+            return [
+                "ISO/TC "
+                + parts[0].lstrip("0")
+                + "".join(f"/SC {part.lstrip('0')}" for part in parts[1:])
+            ]
+        return []
     if owner == "BSI":
         return _unique_labels(
             f"{letters.upper()} {number.upper()}"

@@ -296,7 +296,10 @@ class EnrichmentRepository:
                         .filter(
                             self._master_searchable_filter(),
                             StandardMaster.sdo_id == sdo_id,
-                            StandardMaster.display_stdNo.in_(batch),
+                            or_(
+                                StandardMaster.display_stdNo.in_(batch),
+                                StandardMaster.standardno.in_(batch),
+                            ),
                         ),
                 )
                 results.extend(unique_rows_by_id(rows, seen))
@@ -399,8 +402,14 @@ class EnrichmentRepository:
 
             bucket = grouped.setdefault(
                 (int(sdo_id), sdo_prefix),
-                {"containment": {}, "bound": {}, "prefixes": {sdo_prefix}},
+                {
+                    "containment": {},
+                    "bound": {},
+                    "prefixes": {sdo_prefix},
+                    "literal_cores": set(),
+                },
             )
+            bucket["literal_cores"].add(str(core_token))
             key = (core, year)
 
             if containment:
@@ -440,6 +449,34 @@ class EnrichmentRepository:
                 fulltext_column=StandardMaster.display_stdNo,
                 extra_filters=tuple(extra_filters),
             )
+            if any(
+                re.search(r"[^A-Za-z0-9]", core)
+                for core in bucket["literal_cores"]
+            ):
+                # Some short standards keep punctuation in the catalogue
+                # identity (for example ASHRAE 62.1). Preserve that spelling
+                # as a bounded fallback alongside the normalized lookup,
+                # which can otherwise return unrelated values such as 90136.
+                literal_filters = []
+                for core in bucket["literal_cores"]:
+                    literal_filters.extend(
+                        field.ilike(f"%{core}%")
+                        for field in (
+                            StandardMaster.display_stdNo,
+                            StandardMaster.standardno,
+                        )
+                    )
+                if literal_filters:
+                    rows = run_with_retry(
+                        self.db,
+                        lambda: self.db.query(StandardMaster)
+                        .filter(
+                            StandardMaster.sdo_id == sdo_id,
+                            *extra_filters,
+                            or_(*literal_filters),
+                        )
+                    )
+                    results.extend(unique_rows_by_id(rows, seen))
 
             results.extend(
                 keep_rows_containing_core(

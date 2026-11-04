@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 
@@ -255,6 +256,7 @@ def clean(value: str) -> str:
     return value.strip()
 
 
+@lru_cache(maxsize=32768)
 def normalize_tokens(value: str) -> str:
     value = clean(value).upper()
     value = re.sub(r"\s*([:/.,-])\s*", r"\1", value)
