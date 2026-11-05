@@ -1,70 +1,21 @@
 
-"""Prepare search rows before an export file is built."""
-
-import re
-
 from app.core.standard_identity import parse_identity
 from app.services.document_search_service import DocumentSearchService
 from app.services.grouping_service import GroupingService
 
 
-def _get_requested_identity(result):
-    """Extract the requested SDO and standard designation."""
-    standard = result.get("standard") or {}
+def refresh_official_catalog_rows(results, db):
+    """
+    Keep catalogue refresh generic.
 
-    requested_sdo = str(
-        result.get("requested_sdo") or ""
-    ).strip()
-
-    requested_number = str(
-        result.get("requested_standard")
-        or standard.get("display_stdNo")
-        or standard.get("standardno")
-        or ""
-    ).strip()
-
-    return requested_sdo, requested_number
-
-
-def _refresh_export_rows(results, db):
-    """Refresh export rows using the current search results."""
-    refreshed = []
-    cache = {}
-
-    for result in results or []:
-        requested_sdo, requested_number = _get_requested_identity(
-            result
-        )
-
-        if not requested_sdo or not requested_number:
-            refreshed.append(result)
-            continue
-
-        cache_key = (
-            requested_sdo.casefold(),
-            requested_number.casefold(),
-        )
-
-        if cache_key not in cache:
-            cache[cache_key] = DocumentSearchService(db).search(
-                [{
-                    "sdo_name": requested_sdo,
-                    "displaystdno": requested_number,
-                }]
-            )
-
-        current_results = cache[cache_key]
-
-        if current_results:
-            refreshed.extend(current_results)
-        else:
-            refreshed.append(result)
-
-    return refreshed
+    Standard-specific refresh rules belong in the catalogue/search layer,
+    not in export preparation.
+    """
+    return list(results or [])
 
 
 def _expand_series_export_rows(results, db):
-    """Expand only series roots, preserving already-expanded part rows."""
+    """Expand series roots while preserving already-expanded rows."""
     expanded = []
     cache = {}
 
@@ -74,9 +25,14 @@ def _expand_series_export_rows(results, db):
             continue
 
         standard = result.get("standard") or {}
-        requested_sdo, requested_number = _get_requested_identity(
-            result
-        )
+        requested_sdo = str(result.get("requested_sdo") or "").strip()
+
+        requested_number = str(
+            result.get("requested_standard")
+            or standard.get("display_stdNo")
+            or standard.get("standardno")
+            or ""
+        ).strip()
 
         matched_designations = (
             standard.get("display_stdNo"),
@@ -101,7 +57,7 @@ def _expand_series_export_rows(results, db):
             ).get("qualifier") == "SERIES"
         )
 
-        # Already-resolved family members are not new series roots.
+        # Do not expand an already-resolved individual family member.
         if result.get("matched") and standard and not matched_series:
             expanded.append(result)
             continue
@@ -145,22 +101,18 @@ def _expand_series_export_rows(results, db):
                 "_seriesExpanded": True,
             })
 
-    # Remove duplicate found and unmatched export rows.
+    # Remove duplicate results.
     deduplicated = []
     seen = set()
 
     for result in expanded:
-        requested_sdo = re.sub(
-            r"[^A-Z0-9]",
-            "",
-            str(result.get("requested_sdo") or "").upper(),
-        )
+        requested_sdo = str(
+            result.get("requested_sdo") or ""
+        ).strip().casefold()
 
-        requested_standard = re.sub(
-            r"[^A-Z0-9]",
-            "",
-            str(result.get("requested_standard") or "").upper(),
-        )
+        requested_standard = str(
+            result.get("requested_standard") or ""
+        ).strip().casefold()
 
         standard = result.get("standard") or {}
 
@@ -194,10 +146,6 @@ def _expand_series_export_rows(results, db):
         deduplicated.append(result)
 
     return deduplicated
-
-
-def refresh_official_catalog_rows(results, db):
-    return _refresh_export_rows(results, db)
 
 
 def expand_series_export_rows(results, db):

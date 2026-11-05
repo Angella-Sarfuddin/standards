@@ -87,10 +87,59 @@ const committeeDisplayCodes = (code, description, ownerSdo) => {
   if (owner === "IS") {
     owner = "BIS";
   }
-  if (!["ASTM", "BIS", "BSI", "IEC"].includes(owner)) {
+  if (
+    ![
+      "API",
+      "ASTM",
+      "BIS",
+      "BSI",
+      "IEC",
+      "ISO",
+      "AMPP-NACE",
+      "NACE",
+    ].includes(owner)
+  ) {
     return null;
   }
   const text = `${description || ""} ${code || ""}`.replace(/\s+/g, " ").trim();
+  if (owner === "API") {
+    return description?.trim() ? [description.trim()] : [];
+  }
+  if (owner === "AMPP-NACE" || owner === "NACE") {
+    const numericCode = String(code || "").match(/(?<!\d)\d+(?:\.\d+)*(?!\d)/);
+    return numericCode ? [numericCode[0]] : [];
+  }
+  if (owner === "ISO") {
+    const explicit = [
+      ...text.matchAll(
+        /\bISO\s*\/\s*TC\s*\d+[A-Z]?(?:\s*\/\s*(?:SC|WG|JWG|AHG|PT)\s*\d+[A-Z]?)*/gi
+      ),
+    ].map((match) =>
+      match[0]
+        .replace(/\bISO\s*\/\s*TC\s*/i, "ISO/TC ")
+        .replace(/\s*\/\s*/g, "/")
+        .replace(/\b(SC|WG|JWG|AHG|PT)\s*/gi, "$1 ")
+        .replace(/\s+/g, " ")
+        .replace(/\.+$/, "")
+        .trim()
+    );
+    if (explicit.length) {
+      return uniqueLabels(explicit);
+    }
+    const parts = String(code || "")
+      .replace(/\s+/g, "")
+      .split("/")
+      .filter(Boolean);
+    if (parts.length && parts.every((part) => /^\d+[A-Z]?$/i.test(part))) {
+      return [
+        `ISO/TC ${parts[0].replace(/^0+(?=\d)/, "")}${parts
+          .slice(1)
+          .map((part) => `/SC ${part.replace(/^0+(?=\d)/, "")}`)
+          .join("")}`,
+      ];
+    }
+    return [];
+  }
   if (owner === "BSI") {
     return uniqueLabels(
       [...text.matchAll(/(?:^|[^A-Z0-9])(GMB|GBM)\s*0*(\d+[A-Z]?)/gi)].map(
@@ -241,10 +290,10 @@ export const deduplicateResultRows = (results) => {
     const sourceIdentity = result?.source_row_identity;
     const sourceSuffix = sourceIdentity
       ? `:source:${JSON.stringify(sourceIdentity)}`
-      : "";
+      : `:request:${request}`;
     const key =
       result?.matched && result?.standard
-        ? `found:${sdo}:${resolved}`
+        ? `found:${sdo}:${resolved}${sourceSuffix}`
         : `unmatched:${sdo}:${request}:${String(result?.status || "").toUpperCase()}:${String(result?.status_detail || "").toUpperCase()}${sourceSuffix}`;
     if (seen.has(key)) return false;
     seen.add(key);
