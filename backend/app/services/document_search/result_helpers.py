@@ -3,14 +3,130 @@
 import re
 
 from app.core.standard_formatter import remove_draft_marker
-from app.core.standard_identity import normalize_tokens
+from app.core.standard_identity import (
+    identity_matches,
+    normalize_tokens,
+    parse_identity,
+)
+
+
+def _source_request_key(result):
+    """Identify one source request without merging separate worksheet rows."""
+    source_identity = result.get("_source_request_identity")
+    if source_identity is None:
+        source_identity = result.get("source_row_identity")
+    if not isinstance(source_identity, (tuple, list)):
+        return None
+
+    return (
+        normalize_tokens(result.get("requested_sdo") or ""),
+        tuple(source_identity),
+    )
+
+
+def _result_identity(result, display):
+    """Parse one designation. Empty text has no identity."""
+    text = str(display or "").strip()
+    sdo_name = str(result.get("requested_sdo") or "").strip()
+    if not text or not sdo_name:
+        return None
+    identity = parse_identity(sdo_name, text)
+    if not (identity.get("core_number") or identity.get("core")):
+        return None
+    return identity
+
+
+def _edition_year(identity):
+    if not identity:
+        return None
+    try:
+        year = identity.get("year")
+        return int(year) if year is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _must_remain_unmatched(result):
+    """Requests that stay unresolved even when a related edition was found."""
+    status = str(result.get("status") or "").strip().casefold()
+    detail = str(result.get("status_detail") or "")
+    if status == "sdo not found":
+        return True
+    if re.search(
+        r"(?i)revision/amendment requests are excluded|standalone "
+        r"(?:revision|amendment)",
+        detail,
+    ):
+        return True
+    if re.search(
+        r"(?i)no database edition is available for requested year",
+        detail,
+    ):
+        return True
+    return False
+
+
+def _resolved_by_found_standard(result, found_identities):
+    """True when this unmatched row is an edition of a standard already found.
+
+    A requested year newer than every found edition of that standard stays
+    unmatched. A different number, part, or section does not match.
+    """
+    if _must_remain_unmatched(result):
+        return False
+    requested = _result_identity(result, result.get("requested_standard"))
+    if requested is None:
+        return False
+    requested_year = _edition_year(requested)
+    for found in found_identities:
+        if not identity_matches(requested, found, check_year=False):
+            continue
+        found_year = _edition_year(found)
+        if (
+            requested_year is not None
+            and found_year is not None
+            and requested_year > found_year
+        ):
+            continue
+        return True
+    return False
 
 
 def deduplicate_results(results, service_class):
-    """Keep one row per distinct request for each resolved standard."""
+    """Keep resolved standards out of the unmatched result set."""
+    resolved_source_requests = {
+        source_key
+        for result in results or []
+        if result.get("matched") and result.get("standard")
+        if (source_key := _source_request_key(result)) is not None
+    }
+    found_identities = []
+    for result in results or []:
+        standard = result.get("standard") or {}
+        if not result.get("matched") or not standard:
+            continue
+        display = (
+            standard.get("display_stdNo") or standard.get("standardno")
+            if isinstance(standard, dict)
+            else getattr(standard, "display_stdNo", None)
+            or getattr(standard, "standardno", None)
+        )
+        identity = _result_identity(result, display)
+        if identity is not None:
+            found_identities.append(identity)
+
     deduplicated = []
     seen = set()
     for result in results or []:
+        if not result.get("matched") and (
+            (
+                (source_key := _source_request_key(result)) is not None
+                and source_key in resolved_source_requests
+            )
+            or _resolved_by_found_standard(result, found_identities)
+        ):
+            continue
+
         if not result.get("matched"):
             result = dict(result)
             reason = service_class._not_found_reason(result)

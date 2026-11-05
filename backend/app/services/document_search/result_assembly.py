@@ -8,8 +8,9 @@ logger = logging.getLogger(__name__)
 
 from app.services.document_search.selection_context import use_candidate_status_map
 
-from app.services.ieee_official_metadata import IEEEOfficialMetadataService
 from app.core.standard_identity import (
+    designation_cites_nace_number,
+    nace_publication_number,
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
@@ -49,6 +50,37 @@ def assemble_results(
 
     seen = set()
 
+    def _row_nace_number(row):
+        return nace_publication_number(
+            row.get("search_sdo_name") or row.get("sdo_name") or "",
+            " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "displaystdno",
+                    "result_displaystdno",
+                    "full_display_number",
+                )
+            ),
+        )
+
+    def _candidate_serves_request(row, standard):
+        if getattr(standard, "sdo_id", None) == row["sdo_id"]:
+            return True
+        nace_number = _row_nace_number(row)
+        return bool(
+            nace_number
+            and designation_cites_nace_number(
+                " ".join(
+                    str(value or "")
+                    for value in (
+                        getattr(standard, "display_stdNo", ""),
+                        getattr(standard, "standardno", ""),
+                    )
+                ),
+                nace_number,
+            )
+        )
+
     matched_candidates = [
         standard
         for row in unique_prepared_rows.values()
@@ -56,7 +88,7 @@ def assemble_results(
             local_matches.get(row["request_key"], [])
             + master_matches.get(row["request_key"], [])
         )
-        if getattr(standard, "sdo_id", None) == row["sdo_id"]
+        if _candidate_serves_request(row, standard)
     ]
 
     nace_mr0103_overrides = {}
@@ -71,25 +103,6 @@ def assemble_results(
         hi_replacement = service._official_hi_replacement(row)
         if hi_replacement is not None:
             matched_candidates.append(hi_replacement)
-
-    ieee_replacements = {}
-    for row in unique_prepared_rows.values():
-        ieee_metadata = IEEEOfficialMetadataService.lookup(
-            row.get("search_sdo_name") or row.get("sdo_name"),
-            row.get("result_displaystdno") or row.get("displaystdno"),
-        )
-        if ieee_metadata is None:
-            continue
-        replacement = service._official_ieee_replacement(
-            row,
-            ieee_metadata,
-        )
-        ieee_replacements[row["request_key"]] = (
-            ieee_metadata,
-            replacement,
-        )
-        if replacement is not None:
-            matched_candidates.append(replacement)
 
     for standard in matched_candidates:
 
@@ -228,14 +241,61 @@ def assemble_results(
 
         request_candidates = local_standards + master_standards
 
-        # SDO + standard number form one identity. Keep this guard at the
-        # result boundary as well as in the partitioned queries so a
-        # candidate from another catalogue can never be surfaced.
+        # SDO + standard number form one identity. A NACE No. request may
+        # also use a row from the joint catalogue when that row cites the
+        # same NACE number.
         request_candidates = [
             candidate
             for candidate in request_candidates
-            if getattr(candidate, "sdo_id", None) == row["sdo_id"]
+            if _candidate_serves_request(row, candidate)
         ]
+        if service._is_api_request(row) and request_candidates:
+            active_base_keys = {
+                (
+                    service._candidate_year(candidate, "API"),
+                    normalize_identity_core(
+                        parse_identity(
+                            "API",
+                            candidate.display_stdNo
+                            or candidate.standardno
+                            or "",
+                        ).get("core_number")
+                        or ""
+                    ),
+                )
+                for candidate in request_candidates
+                if (
+                    service._candidate_catalog_visibility(
+                        candidate,
+                        status_map,
+                    ) is True
+                    and service._candidate_reaffirmation_year(candidate) == 0
+                )
+            }
+            if active_base_keys:
+                request_candidates = [
+                    candidate
+                    for candidate in request_candidates
+                    if (
+                        service._candidate_catalog_visibility(
+                            candidate,
+                            status_map,
+                        ) is True
+                        or (
+                            service._candidate_year(candidate, "API"),
+                            normalize_identity_core(
+                                parse_identity(
+                                    "API",
+                                    candidate.display_stdNo
+                                    or candidate.standardno
+                                    or "",
+                                ).get("core_number")
+                                or ""
+                            ),
+                        )
+                        not in active_base_keys
+                    )
+                ]
 
         official_nace_candidate = nace_mr0103_overrides.get(
             row["request_key"]
@@ -309,18 +369,6 @@ def assemble_results(
             if family_members and requested_family != "SERIES":
                 request_candidates = family_members
 
-        ieee_resolution = ieee_replacements.get(key)
-        if ieee_resolution is not None:
-            ieee_metadata, ieee_replacement = ieee_resolution
-            # IEEE's legacy records are incorrectly marked ACTIVE in the
-            # mirror. Use the official successor's real catalogue row so
-            # year, price, title, and committee all belong to that edition.
-            request_candidates = (
-                [ieee_replacement]
-                if ieee_replacement is not None
-                else []
-            )
-
         standards_by_id = {}
         for standard in request_candidates:
             standard_id = standard.Standard_id or standard.id
@@ -339,6 +387,13 @@ def assemble_results(
                         status_info,
                         standard,
                     )
+                    if (
+                        service._is_api_request(row)
+                        and status_info
+                        and str(status_info.get("name") or "").upper()
+                        == "ACTIVE"
+                    ):
+                        status, is_match = "AVAILABLE", True
                     data["catalog_status"] = (
                         status_info.get("name")
                         if status_info
@@ -467,17 +522,8 @@ def assemble_results(
                         "Requested TEMA edition is superseded; "
                         f"latest available edition is {actual_year}."
                     )
-                ieee_relationship_type = (
-                    getattr(ieee_resolution[0], "relationship_type", None)
-                    if ieee_resolution is not None
-                    else None
-                )
                 has_explicit_replacement = bool(
                     hi_replacement is not None
-                    or (
-                        ieee_resolution is not None
-                        and ieee_resolution[1] is not None
-                    )
                     or requested_tema_is_historical
                 )
                 if (
@@ -489,17 +535,9 @@ def assemble_results(
                     and int(requested_year) != int(actual_year)
                 ):
                     status_detail = (
-                        (
-                            f"Requested edition {requested_year} was "
-                            "incorporated into the current consolidated "
-                            f"edition {actual_year}."
-                        )
-                        if ieee_relationship_type == "INCORPORATED_INTO"
-                        else (
-                            f"Requested edition {requested_year} is "
-                            "superseded; latest available edition is "
-                            f"{actual_year}."
-                        )
+                        f"Requested edition {requested_year} is "
+                        "superseded; latest available edition is "
+                        f"{actual_year}."
                     )
                 current_designation = str(
                     data.get("display_stdNo")
@@ -523,10 +561,9 @@ def assemble_results(
                         "and is not available."
                     )
                 reaffirmed_year = (
-                    reaffirmation_year(row["displaystdno"])
-                    or reaffirmation_year(standard.Standard_id or "")
-                    or reaffirmation_year(standard.display_stdNo or "")
+                    reaffirmation_year(standard.display_stdNo or "")
                     or reaffirmation_year(standard.standardno or "")
+                    or reaffirmation_year(standard.Standard_id or "")
                 )
                 if is_match and actual_year is not None:
                     if requested_year is None:
@@ -659,7 +696,6 @@ def assemble_results(
                         if (
                             is_match
                             and has_explicit_replacement
-                            and ieee_relationship_type != "INCORPORATED_INTO"
                         )
                         else (
                             service._bis_superseded_by_note(status_detail)
@@ -687,10 +723,6 @@ def assemble_results(
         # NOT FOUND
         # ----------------------------------------------------
 
-        ieee_resolution = ieee_replacements.get(key)
-        ieee_metadata = (
-            ieee_resolution[0] if ieee_resolution else None
-        )
         requested_edition_status = str(
             row.get("requested_edition_status") or ""
         ).strip().upper()
@@ -703,28 +735,7 @@ def assemble_results(
             )
             else None
         )
-        if ieee_metadata:
-            ieee_relationship_type = getattr(
-                ieee_metadata,
-                "relationship_type",
-                "SUPERSEDED_BY",
-            )
-            if ieee_relationship_type == "INCORPORATED_INTO":
-                not_found_detail = (
-                    "IEEE SA lists this amendment edition as superseded and "
-                    "incorporated into the IEEE 802.1Q consolidated family; "
-                    f"the current consolidated edition is "
-                    f"{ieee_metadata.replacement_designation}, but that "
-                    "edition is not available in the local catalogue."
-                )
-            else:
-                not_found_detail = (
-                    "IEEE SA lists this edition as superseded; current "
-                    f"successor is {ieee_metadata.replacement_designation}, "
-                    "but that successor is not available in the local "
-                    "catalogue."
-                )
-        elif unavailable_edition_status:
+        if unavailable_edition_status:
             not_found_detail = (
                 f"Requested edition is marked "
                 f"{unavailable_edition_status} in the catalogue "
@@ -746,22 +757,8 @@ def assemble_results(
                 or "NOT FOUND"
             ),
             "status_detail": not_found_detail,
-            "replacement_standard": (
-                ieee_metadata.replacement_designation
-                if ieee_metadata
-                else row.get("stated_replacement")
-            ),
-            "superseded_by": (
-                ieee_metadata.replacement_designation
-                if ieee_metadata
-                and getattr(
-                    ieee_metadata,
-                    "relationship_type",
-                    "SUPERSEDED_BY",
-                )
-                != "INCORPORATED_INTO"
-                else None
-            ),
+            "replacement_standard": row.get("stated_replacement"),
+            "superseded_by": None,
             "standard": None,
             "actions": {"manual_search": True},
             "_source_request_identity": row.get(

@@ -6,6 +6,7 @@ from app.core.standard_identity import (
     identity_matches,
     normalize_identity_core,
     parse_identity,
+    reaffirmation_year,
     standard_number_year,
 )
 
@@ -88,12 +89,16 @@ def _select_candidate(
                 )
                 or 0
             )
+            reaffirmed = service_class._candidate_reaffirmation_year(
+                candidate
+            )
             if service_class._is_api_request(row):
                 # API records may carry alternate prefixes across
                 # editions (for example API versus ANSI/API). Select the
                 # newest matching edition before using prefix as a tie-breaker.
                 return (
                     year,
+                    reaffirmed,
                     int(getattr(candidate, "DocumentAvailability", 1) == 1),
                     exact_prefix,
                     int(getattr(candidate, "recent", 0) == 1),
@@ -102,6 +107,7 @@ def _select_candidate(
             return (
                 exact_prefix,
                 year,
+                reaffirmed,
                 int(getattr(candidate, "DocumentAvailability", 1) == 1),
                 int(getattr(candidate, "recent", 0) == 1),
                 int(hasattr(candidate, "standardyear")),
@@ -232,9 +238,13 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         has_document = int(
             getattr(candidate, "DocumentAvailability", 1) == 1
         )
+        reaffirmed = service_class._candidate_reaffirmation_year(
+            candidate
+        )
         if service_class._is_api_request(row):
             return (
                 year,
+                reaffirmed,
                 has_document,
                 exact_prefix,
                 recent,
@@ -243,6 +253,7 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
         return (
             exact_prefix,
             year,
+            reaffirmed,
             has_document,
             recent,
             is_master_record,
@@ -261,6 +272,21 @@ def _candidate_year(candidate, sdo_name):
     return (
         candidate_identity.get("year")
         or standard_number_year(candidate.standardno)
+    )
+
+
+def _candidate_reaffirmation_year(candidate):
+    """Newer review of the same edition, from the catalogue text.
+
+    ``(R2026)``, ``Reaffirmed 2026``, and the same markers on any
+    publisher outrank an older review. A row with no review year stays
+    at zero so it cannot outrank a dated reaffirmation of that edition.
+    """
+    return (
+        reaffirmation_year(getattr(candidate, "display_stdNo", None) or "")
+        or reaffirmation_year(getattr(candidate, "standardno", None) or "")
+        or reaffirmation_year(getattr(candidate, "Standard_id", None) or "")
+        or 0
     )
 
 def _normalized_identifier_prefix(value):
@@ -374,6 +400,7 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
 
     unavailable_cores = {core for core, _year in unavailable_editions}
     dated_available_cores = set()
+    active_base_editions = set()
     for candidate in candidates:
         status_info = status_map.get(
             getattr(candidate, "status_id", None)
@@ -400,6 +427,14 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
         year = service_class._candidate_year(candidate, "API") or None
         if core in unavailable_cores and year is not None:
             dated_available_cores.add(core)
+            if (
+                service_class._candidate_catalog_visibility(
+                    candidate,
+                    status_map,
+                ) is True
+                and service_class._candidate_reaffirmation_year(candidate) == 0
+            ):
+                active_base_editions.add((core, int(year)))
     yearless_unavailable_cores = unavailable_cores - dated_available_cores
 
     filtered = []
@@ -417,6 +452,28 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
         if service_class._status_label_is_unavailable(
             lifecycle_status
         ):
+            identity = parse_identity(
+                "API",
+                getattr(candidate, "display_stdNo", "")
+                or getattr(candidate, "standardno", ""),
+            )
+            core = normalize_identity_core(
+                identity.get("core_number") or identity.get("core") or ""
+            )
+            year = service_class._candidate_year(candidate, "API") or None
+            requested_reaffirmation = reaffirmation_year(
+                str(row.get("displaystdno") or "")
+            )
+            if (
+                requested_reaffirmation is None
+                and core
+                and year is not None
+                and (core, int(year)) in active_base_editions
+            ):
+                # A reaffirmation/review row may be withdrawn while the
+                # catalogue's clean base edition remains active. For an
+                # unversioned API request, the active base is authoritative.
+                continue
             filtered.append(candidate)
             continue
         identity = parse_identity(
@@ -437,6 +494,9 @@ def _filter_api_unavailable_candidates(candidates, status_map, row, *, service_c
             # They cannot represent the current edition.
             continue
         if core in yearless_unavailable_cores and year is None:
+            continue
+        if core and year is not None and (core, int(year)) in active_base_editions:
+            filtered.append(candidate)
             continue
         if core and (core, int(year) if year is not None else None) in unavailable_editions:
             continue

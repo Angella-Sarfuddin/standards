@@ -236,8 +236,17 @@ def match_local_standards(
                 # Local display-number matches cannot establish that the
                 # selected edition is the newest available. Consult the
                 # master catalogue even when an older requested year has
-                # an exact local match.
-                unresolved.append(row)
+                # an exact local match. For an explicitly requested edition,
+                # the exact master display/standard-number lookups above are
+                # sufficient; avoid the broad designation-neutral scan.
+                unresolved.append(
+                    {
+                        **row,
+                        "skip_master_identity": bool(
+                            row["identity"].get("year")
+                        ),
+                    }
+                )
         else:
             unresolved.append(row)
 

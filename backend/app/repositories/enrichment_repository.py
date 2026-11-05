@@ -22,6 +22,7 @@ from app.models.sdo_classification import SDOClassification
 from app.models.sdo import SDO
 from app.core.standard_identity import (
     adoption_price_like_patterns,
+    designation_cites_nace_number,
     identity_core_appears,
     sdo_identifier_prefixes,
     identity_discovery_terms,
@@ -51,6 +52,60 @@ class EnrichmentRepository:
     # ==========================================
     # SINGLE MASTER STANDARD
     # ==========================================
+
+    def search_nace_publication_rows(self, number):
+        """Rows whose designation names this NACE publication number.
+
+        The number is taken from the request. A joint SSPC row such as
+        ``SSPC-SP 14-2007-NACE No. 8`` qualifies because it cites that
+        number, as does a row filed as ``NACE No. 8``.
+        """
+        if not str(number or "").isdigit():
+            return []
+        cited_number = str(int(number))
+        sdo_rows = run_with_retry(
+            self.db,
+            lambda: self.db.query(SDO.id).filter(
+                SDO.sdo_title.in_((
+                    "AMPP-NACE",
+                    "AMPP-SSPC",
+                    "NACE",
+                    "SSPC",
+                ))
+            ),
+        )
+        sdo_ids = [row.id for row in sdo_rows]
+        if not sdo_ids:
+            return []
+        spellings = (
+            f"NACE NO. {cited_number}",
+            f"NACE NO {cited_number}",
+            f"NACE NO.{cited_number}",
+        )
+        filters = [
+            field.like(pattern)
+            for field in (
+                StandardMaster.display_stdNo,
+                StandardMaster.standardno,
+            )
+            for spelling in spellings
+            for pattern in (f"{spelling}%", f"%{spelling}%")
+        ]
+        rows = run_with_retry(
+            self.db,
+            lambda: self.db.query(StandardMaster).filter(
+                StandardMaster.sdo_id.in_(sdo_ids),
+                self._master_searchable_filter(),
+                or_(*filters),
+            ),
+        )
+        return [
+            row for row in rows
+            if designation_cites_nace_number(
+                f"{row.display_stdNo or ''} {row.standardno or ''}",
+                cited_number,
+            )
+        ]
 
     def get_master_standard(self, standard_id):
         return (
@@ -165,20 +220,6 @@ class EnrichmentRepository:
             .all()
         )
 
-    def find_visible_ieee_replacement(self, sdo_id, standardno, year):
-        """Visible IEEE replacement rows for one publisher, number, and year."""
-        return (
-            self.db.query(StandardMaster)
-            .filter(
-                StandardMaster.sdo_id == sdo_id,
-                StandardMaster.standardno == standardno,
-                StandardMaster.standardyear == year,
-                StandardMaster.status == 1,
-            )
-            .order_by(StandardMaster.id.asc())
-            .all()
-        )
-
     def get_latest_tema_edition(self, sdo_id):
         """Return the newest visible TEMA numbered edition in the catalogue."""
         if not sdo_id:
@@ -255,7 +296,10 @@ class EnrichmentRepository:
                         .filter(
                             self._master_searchable_filter(),
                             StandardMaster.sdo_id == sdo_id,
-                            StandardMaster.display_stdNo.in_(batch),
+                            or_(
+                                StandardMaster.display_stdNo.in_(batch),
+                                StandardMaster.standardno.in_(batch),
+                            ),
                         ),
                 )
                 results.extend(unique_rows_by_id(rows, seen))
@@ -358,8 +402,14 @@ class EnrichmentRepository:
 
             bucket = grouped.setdefault(
                 (int(sdo_id), sdo_prefix),
-                {"containment": {}, "bound": {}, "prefixes": {sdo_prefix}},
+                {
+                    "containment": {},
+                    "bound": {},
+                    "prefixes": {sdo_prefix},
+                    "literal_cores": set(),
+                },
             )
+            bucket["literal_cores"].add(str(core_token))
             key = (core, year)
 
             if containment:
@@ -399,6 +449,34 @@ class EnrichmentRepository:
                 fulltext_column=StandardMaster.display_stdNo,
                 extra_filters=tuple(extra_filters),
             )
+            if any(
+                re.search(r"[^A-Za-z0-9]", core)
+                for core in bucket["literal_cores"]
+            ):
+                # Some short standards keep punctuation in the catalogue
+                # identity (for example ASHRAE 62.1). Preserve that spelling
+                # as a bounded fallback alongside the normalized lookup,
+                # which can otherwise return unrelated values such as 90136.
+                literal_filters = []
+                for core in bucket["literal_cores"]:
+                    literal_filters.extend(
+                        field.ilike(f"%{core}%")
+                        for field in (
+                            StandardMaster.display_stdNo,
+                            StandardMaster.standardno,
+                        )
+                    )
+                if literal_filters:
+                    rows = run_with_retry(
+                        self.db,
+                        lambda: self.db.query(StandardMaster)
+                        .filter(
+                            StandardMaster.sdo_id == sdo_id,
+                            *extra_filters,
+                            or_(*literal_filters),
+                        )
+                    )
+                    results.extend(unique_rows_by_id(rows, seen))
 
             results.extend(
                 keep_rows_containing_core(
