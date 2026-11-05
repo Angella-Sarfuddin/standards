@@ -50,7 +50,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "All Are Well"}
 
 
 @app.exception_handler(OperationalError)
