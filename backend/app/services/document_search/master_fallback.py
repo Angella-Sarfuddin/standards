@@ -219,7 +219,18 @@ def find_master_matches(
                 row["sdo_id"],
                 pattern_prefix,
                 lookup_core,
-                None,
+                (
+                    None
+                    if (
+                        str(
+                            row.get("search_sdo_name")
+                            or row.get("sdo_name")
+                            or ""
+                        ).strip().upper() == "API"
+                        and not row["identity"].get("qualifier")
+                    )
+                    else None
+                ),
             )
             for lookup_core in identity_lookup_core_tokens(
                 search_sdo_name,

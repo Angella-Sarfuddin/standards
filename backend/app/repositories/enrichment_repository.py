@@ -33,6 +33,23 @@ from app.core.standard_identity import (
 
 
 class EnrichmentRepository:
+    def _identity_search_sdo_ids(self, sdo_id, sdo_prefix):
+        """Include catalogue owners for joint publisher designations."""
+        normalized = str(sdo_prefix or "").upper().replace(" ", "")
+        if normalized not in {"IEEE", "IEC"}:
+            return (sdo_id,)
+        aliases = ("IEC", "IEEE") if normalized == "IEEE" else ("IEEE",)
+        alias_ids = (
+            self.db.query(SDO.id)
+            .filter(
+                or_(
+                    SDO.sdo_title.in_(aliases),
+                    SDO.sdo_fullname.in_(aliases),
+                )
+            )
+            .all()
+        )
+        return tuple(dict.fromkeys([sdo_id, *(row[0] for row in alias_ids)]))
 
     def __init__(self, db):
         self.db = db
@@ -200,7 +217,7 @@ class EnrichmentRepository:
         return (
             self.db.query(StandardMaster)
             .filter(
-                StandardMaster.sdo_id == sdo_id,
+                StandardMaster.sdo_id == search_sdo_id,
                 StandardMaster.standardno.ilike("%MR0103%"),
                 StandardMaster.standardno.ilike("%17945%"),
                 StandardMaster.status == 1,
@@ -213,7 +230,7 @@ class EnrichmentRepository:
         return (
             self.db.query(StandardMaster)
             .filter(
-                StandardMaster.sdo_id == sdo_id,
+                StandardMaster.sdo_id == search_sdo_id,
                 StandardMaster.standardno.in_(["ANSI/HI 14.6", "HI 14.6"]),
                 StandardMaster.status == 1,
             )
@@ -424,7 +441,11 @@ class EnrichmentRepository:
         seen = set()
         text_columns = ("display_stdNo", "standardno")
 
-        for (sdo_id, _prefix), bucket in grouped.items():
+        for (sdo_id, prefix), bucket in grouped.items():
+          for search_sdo_id in self._identity_search_sdo_ids(sdo_id, prefix):
+            search_prefixes = set(bucket["prefixes"])
+            if str(prefix).upper() == "IEEE":
+                search_prefixes.update({"IEC/IEEE", "IEEE/IEC"})
             cores_in_batch = list(
                 dict.fromkeys(core for (core, _year) in bucket["containment"])
             )
@@ -439,9 +460,9 @@ class EnrichmentRepository:
             rows = fetch_long_core_candidates(
                 self.db,
                 model=StandardMaster,
-                sdo_id=sdo_id,
+                sdo_id=search_sdo_id,
                 cores=cores_in_batch,
-                sdo_prefixes=bucket["prefixes"],
+                sdo_prefixes=search_prefixes,
                 text_columns=(
                     StandardMaster.display_stdNo,
                     StandardMaster.standardno,
@@ -471,7 +492,7 @@ class EnrichmentRepository:
                         self.db,
                         lambda: self.db.query(StandardMaster)
                         .filter(
-                            StandardMaster.sdo_id == sdo_id,
+                            StandardMaster.sdo_id == search_sdo_id,
                             *extra_filters,
                             or_(*literal_filters),
                         )
@@ -512,7 +533,7 @@ class EnrichmentRepository:
 
                 query_filters = [
                     self._master_searchable_filter(),
-                    StandardMaster.sdo_id == sdo_id,
+                    StandardMaster.sdo_id == search_sdo_id,
                     or_(*filters),
                 ]
                 if len(years) == 1:
@@ -539,7 +560,6 @@ class EnrichmentRepository:
                         seen,
                     )
                 )
-
         return results
 
     # ==========================================

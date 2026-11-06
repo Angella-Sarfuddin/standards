@@ -56,6 +56,55 @@ export default function ResultsPanel({
         </div>
       </div>
 
+      <div className="flex flex-col gap-3 border-y border-border/70 py-3">
+        <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+          <Pagination
+            id="results-rows-per-page"
+            page={resultsPage}
+            total={filteredCount}
+            pageSize={pageSize}
+            onPageChange={onResultsPageChange}
+            onPageSizeChange={onPageSizeChange}
+          />
+          <div className="flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row sm:items-center">
+            <Select
+              value={exportMode}
+              onValueChange={onExportModeChange}
+              disabled={isExporting}
+            >
+              <SelectTrigger className="h-10 w-full rounded-xl bg-background sm:w-72">
+                <SelectValue placeholder="Export file" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="found-and-not-found">
+                  Quotation + not found files
+                </SelectItem>
+                <SelectItem value="latest-years">
+                  Matching standards with current year
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 w-full rounded-xl sm:w-auto"
+              onClick={onExport}
+              disabled={selectedCount === 0 || isExporting}
+            >
+              {isExporting ? <Spinner /> : <Download />}
+              {isExporting
+                ? "Exporting..."
+                : `Export ${selectedCount} Selected`}
+            </Button>
+          </div>
+        </div>
+        <div className="text-sm">
+          <span className="mr-2 inline-block size-2 rounded-full bg-primary align-middle" />
+          <strong>{selectedCount}</strong>
+          <span className="ml-2 text-muted-foreground">selected for quotation</span>
+        </div>
+      </div>
+
       <ResultStatStrip
         resultViewFilter={resultViewFilter}
         matchedCount={matchedCount}
@@ -88,53 +137,6 @@ export default function ResultsPanel({
         />
       )}
 
-      <Pagination
-        id="results-rows-per-page"
-        page={resultsPage}
-        total={filteredCount}
-        pageSize={pageSize}
-        onPageChange={onResultsPageChange}
-        onPageSizeChange={onPageSizeChange}
-      />
-
-      <div className="flex flex-col items-stretch justify-between gap-3 border-t border-border/70 pt-4 sm:flex-row sm:items-center">
-        <div className="text-sm">
-          <span className="mr-2 inline-block size-2 rounded-full bg-primary align-middle" />
-          <strong>{selectedCount}</strong>
-          <span className="ml-2 text-muted-foreground">selected for quotation</span>
-        </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-          <Select
-            value={exportMode}
-            onValueChange={onExportModeChange}
-            disabled={isExporting}
-          >
-            <SelectTrigger className="h-10 w-full rounded-xl bg-background sm:w-72">
-              <SelectValue placeholder="Export file" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="found-and-not-found">
-                Quotation + not found files
-              </SelectItem>
-              <SelectItem value="latest-years">
-                Matching standards with current year
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-10 w-full rounded-xl sm:w-auto"
-            onClick={onExport}
-            disabled={selectedCount === 0 || isExporting}
-          >
-            {isExporting ? <Spinner /> : <Download />}
-            {isExporting
-              ? "Exporting..."
-              : `Export ${selectedCount} Selected`}
-          </Button>
-        </div>
-      </div>
     </section>
   );
 }

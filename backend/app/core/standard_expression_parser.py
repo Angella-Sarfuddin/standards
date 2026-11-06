@@ -73,6 +73,9 @@ class StandardExpressionParser:
         "DESIGN",
         "CASTINGS-RECEIPT",
         "CASTINGS RECEIPT",
+        "STANDARD",
+        "STANDARDS",
+        "SDO",
     }
 
     # Compact org codes that appear in the catalogue but not in KNOWN_SDO_PATTERN.
@@ -236,20 +239,21 @@ class StandardExpressionParser:
 
         if explicit_sdo:
             if not cls.is_plausible_sdo(explicit_sdo):
-                return "", value
-            sdo = explicit_sdo.upper()
-            body = re.sub(
-                rf"^\s*{re.escape(explicit_sdo)}\b\s*[:.-]?\s*",
-                "",
-                value,
-                count=1,
-                flags=re.IGNORECASE,
-            ).strip()
-            # If the cell itself begins with a compound SDO, don't strip a
-            # longer SDO down to a shorter category accidentally.
-            if not body and value:
-                body = value
-            return sdo, body
+                # Spreadsheet labels such as "STANDARD" can be copied into
+                # the SDO column. Infer the real SDO from the value instead.
+                explicit_sdo = ""
+            else:
+                sdo = explicit_sdo.upper()
+                body = re.sub(
+                    rf"^\s*{re.escape(explicit_sdo)}\b\s*[:.-]?\s*",
+                    "",
+                    value,
+                    count=1,
+                    flags=re.IGNORECASE,
+                ).strip()
+                if not body and value:
+                    body = value
+                return sdo, body
 
         if cls.is_note_or_legend(value):
             return "", value

@@ -22,6 +22,185 @@ from app.core.standard_identity import (
 
 
 class StandardIdentityTests(unittest.TestCase):
+    def test_concatenated_title_is_not_part_of_iec_designation(self):
+        identity = parse_identity(
+            "IEC",
+            "62271-102High voltage switchgear and controlgear: "
+            "Part-102: Alternating current disconnectors and earthing switches.",
+        )
+        self.assertEqual(identity["core_number"], "62271")
+        self.assertEqual(identity["qualifier"], "PART:102")
+
+    def test_concatenated_power_transformer_title_is_not_part_of_iec_designation(self):
+        identity = parse_identity(
+            "IEC",
+            "60076-4Power Transformer-Part-4: Guide to the lightning "
+            "impulse and switching impulse testing-Power transformer and reactors",
+        )
+        self.assertEqual(identity["core_number"], "60076")
+        self.assertEqual(identity["qualifier"], "PART:4")
+
+    def test_iec_adoption_and_concatenated_titles_are_normalized(self):
+        self.assertEqual(
+            parse_identity("IEC", "62444 / EN 62444")["core_number"],
+            "62444",
+        )
+
+    def test_iec_year_and_title_concatenation_is_not_part_of_designation(self):
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "61869-2:2012Instrument Transformer- PART 2/: "
+                "Additional requirements for current transformers",
+            )[1],
+            "61869-2:2012",
+        )
+        self.assertEqual(
+            canonicalize_search_request("IEC", "60076-7:2018 RLV")[1],
+            "60076-7:2018",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC", "60726Dry Type Power Transformers"
+            )[1],
+            "60726",
+        )
+        requested = parse_identity("IEC", "61386-21")
+        candidate = parse_identity("IEC", "IEC 61386-21:2021")
+        wrong_candidate = parse_identity("IEC", "IEC 61386-22:2021")
+        self.assertEqual(requested["qualifier"], "PART:21")
+        self.assertTrue(identity_matches(requested, candidate))
+        self.assertFalse(identity_matches(requested, wrong_candidate))
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "61869-1: 2023General requirements for instrument transformers "
+                "above 1 kV AC or 1.5 kV DC.",
+            )[1],
+            "61869-1: 2023",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "60099-4Surge Arresters-Part-4: Metal Oxide Surge Arresters "
+                "without gap for A.C systems",
+            )[1],
+            "60099-4",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC", "60584-1:2013 / 3:2021"
+            )[1],
+            "60584-1:2013",
+        )
+        self.assertEqual(
+            parse_identity(
+                "IEC",
+                "61386-21Conduit systems for cable management",
+            )["core_number"],
+            "61386",
+        )
+        self.assertEqual(
+            parse_identity(
+                "IEC",
+                "60598-2Luminaires: Part-2: Particular requirements-"
+                "Fixed general purpose luminaires",
+            )["core_number"],
+            "60598PART2",
+        )
+
+    def test_api_edition_and_errata_text_keeps_base_designation(self):
+        identity = parse_identity(
+            "API",
+            "API 674: (3rd Edition, December 2010 with Errate 2 "
+            "Dtd. April 2015) API Standard",
+        )
+        self.assertEqual(identity["core_number"], "674")
+        self.assertEqual(
+            canonicalize_search_request("API", "API Standard 675"),
+            ("API", "API 675", "API"),
+        )
+
+    def test_header_label_does_not_override_sdo_in_standard_value(self):
+        self.assertEqual(
+            StandardExpressionParser.infer_sdo_and_body(
+                "ASME B31.3",
+                "STANDARD",
+            ),
+            ("ASME", "B31.3"),
+        )
+
+    def test_reaffirmation_followed_by_title_is_removed_generally(self):
+        identity = parse_identity(
+            "ASME",
+            "PTC 6: 2004 (Reaffirmed 2014) "
+            "Steam Turbines Performance Test Codes",
+        )
+        self.assertEqual(identity["core_number"], "PTC6")
+        self.assertEqual(identity["year"], 2004)
+
+    def test_colon_title_is_removed_for_any_sdo(self):
+        identity = parse_identity(
+            "API",
+            "RP 500 : Hazardous area classification "
+            "(Class/Division and Zone)",
+        )
+        self.assertEqual(identity["core_number"], "500")
+        self.assertEqual(identity["designation"], "RP")
+
+    def test_bis_standard_label_and_title_are_removed(self):
+        sdo, number, _ = canonicalize_search_request(
+            "BIS",
+            "Standard -IS 7167-1974 (Reaffirmed 2016): "
+            "Indian Standard Code for Selection and Use of Bucket Elevators",
+        )
+        self.assertEqual(sdo, "BIS")
+        self.assertEqual(number, "IS 7167-1974")
+
+    def test_bis_roman_parts_match_numeric_catalogue_parts(self):
+        self.assertEqual(
+            canonicalize_search_request("IS", "4682 (Part V)"),
+            ("IS", "4682 PART 5", "IS"),
+        )
+        self.assertEqual(
+            canonicalize_search_request("IS", "1893 (Part II)"),
+            ("IS", "1893 PART 2", "IS"),
+        )
+        self.assertEqual(
+            parse_identity("IS", "IS 4682 : Part 5 : 2024")["qualifier"],
+            "PART:5",
+        )
+        self.assertEqual(
+            parse_identity("IS", "IS 1893 : Part 2 : 2014")["qualifier"],
+            "PART:2",
+        )
+        self.assertTrue(
+            identity_matches(
+                parse_identity("IS", "IS 4682 (Part V)"),
+                parse_identity("IS", "IS 4682 : Part 5 : 2024"),
+            )
+        )
+        self.assertTrue(
+            identity_matches(
+                parse_identity("IS", "IS 1893 (Part II)"),
+                parse_identity("IS", "IS 1893 : Part 2 : 2014"),
+            )
+        )
+        self.assertEqual(
+            identity_lookup_core_tokens("IS", "1893", "PART:3"),
+            ["1893 PART 3", "1893"],
+        )
+        self.assertEqual(
+            identity_lookup_core_tokens("IEC", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
+        joint = parse_identity(
+            "IEEE", "IEC/IEEE 60076-57-1202:2017 (EN-FR)"
+        )
+        standalone = parse_identity("IEEE", "60076-57-1202:2017")
+        self.assertEqual(joint["core_number"], standalone["core_number"])
+        self.assertEqual(joint["qualifier"], standalone["qualifier"])
+
     def matches(self, sdo, requested, candidate):
         return identity_matches(
             parse_identity(sdo, requested),

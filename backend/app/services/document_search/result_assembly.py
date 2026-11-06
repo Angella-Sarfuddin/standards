@@ -66,6 +66,20 @@ def assemble_results(
     def _candidate_serves_request(row, standard):
         if getattr(standard, "sdo_id", None) == row["sdo_id"]:
             return True
+        requested_sdo = str(
+            row.get("search_sdo_name") or row.get("sdo_name") or ""
+        ).strip().upper()
+        candidate_number = " ".join(
+            str(value or "")
+            for value in (
+                getattr(standard, "display_stdNo", ""),
+                getattr(standard, "standardno", ""),
+            )
+        ).replace(" ", "").upper()
+        if requested_sdo == "IEEE" and (
+            "IEC/IEEE" in candidate_number or "IEEE/IEC" in candidate_number
+        ):
+            return True
         nace_number = _row_nace_number(row)
         return bool(
             nace_number
@@ -322,6 +336,26 @@ def assemble_results(
                 row,
                 status_map,
             )
+
+        if (
+            row.get("expand_family")
+            and service._is_api_request(row)
+            and row["identity"].get("qualifier") is None
+        ):
+            family_candidates = (
+                service.enrichment_repository
+                .search_master_by_sdo_and_identity_hints(
+                    [
+                        (
+                            row["sdo_id"],
+                            row.get("search_sdo_name") or row["sdo_name"],
+                            row["identity"].get("core_number") or "",
+                            None,
+                        )
+                    ]
+                )
+            )
+            request_candidates.extend(family_candidates)
 
         if row.get("expand_family"):
             with use_candidate_status_map(status_map):

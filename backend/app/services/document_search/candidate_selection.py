@@ -170,12 +170,19 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
     )
     if not candidates:
         return []
-    selected = service_class._select_candidate(
-        candidates,
-        row,
+    selected = None
+    api_family_request = (
+        service_class._is_api_request(row)
+        and not row["identity"].get("qualifier")
+        and not row["identity"].get("family_lookup")
     )
+    if not api_family_request:
+        selected = service_class._select_candidate(
+            candidates,
+            row,
+        )
 
-    if not service_class._is_bare_qualifier_request(row):
+    if not service_class._is_bare_qualifier_request(row) and not api_family_request:
         if selected:
             return [selected]
 
@@ -283,6 +290,16 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
                 candidate_identity.get("identifier_prefix") or ""
             )
             == requested_prefix
+            or (
+                str(row.get("search_sdo_name") or row.get("sdo_name") or "")
+                .strip()
+                .upper()
+                == "IEEE"
+                and str(
+                    candidate_identity.get("identifier_prefix") or ""
+                ).replace(" ", "").upper()
+                in {"IEC/IEEE", "IEEE/IEC"}
+            )
         )
         # A later reaffirmation of the same edition outranks an older
         # one. Publication year still decides before that review year.
@@ -616,6 +633,16 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
                 candidate_identity.get("identifier_prefix") or ""
             )
             == requested_prefix
+            or (
+                str(row.get("search_sdo_name") or row.get("sdo_name") or "")
+                .strip()
+                .upper()
+                == "IEEE"
+                and str(
+                    candidate_identity.get("identifier_prefix") or ""
+                ).replace(" ", "").upper()
+                in {"IEC/IEEE", "IEEE/IEC"}
+            )
         )
         # API catalogue rows can use a different prefix for a newer
         # edition (for example API versus ANSI/API). Let the year decide
