@@ -59,10 +59,45 @@ def split_stated_replacement(value: str) -> Optional[Dict]:
 def _prepare_printed_designation(display: str) -> str:
     """Drop title prose and BIS print marks that hide the designation."""
     display = re.sub(
+        r"(?i)^standard\s*[-:]\s*(?=(?:IS|BIS)\b)",
+        "",
+        display,
+    ).strip()
+    # Source tables may append a reaffirmation marker followed by the
+    # publication title. The marker is lifecycle metadata; everything after
+    # it is descriptive text, not part of the designation.
+    display = re.sub(
+        r"(?is)\s*[\(\[]\s*(?:reaffirmed|reaffirmation|reviewed|confirmed)"
+        r"(?:\s+(?:in|year))?\s*[:=\-]?\s*(?:19|20)\d{2}"
+        r"\s*[\)\]].*$",
+        "",
+        display,
+    ).strip()
+    display = re.sub(
         r"(?i)\s*:\s*indian\s+standards?\s*$",
         "",
         display,
     ).strip()
+    display = re.sub(
+        r"(?is)\s*:\s*indian\s+standard\b.*$",
+        "",
+        display,
+    ).strip()
+    display = re.sub(
+        r"(?i)(?<=\d)\s*:\s*(?:PART|PT)\s+(\d+)\s*:\s*"
+        r"((?:19|20)\d{2})\b",
+        r" PART \1 : \2",
+        display,
+    )
+    # IEC catalogue references may append revision-publication markers such
+    # as RLV after the edition year. They do not change the base identity.
+    display = re.sub(r"(?i)\s+(?:RLV|PRV)\s*$", "", display).strip()
+    display = re.sub(
+        r"(?is)^(?P<base>\d{4,})-2Luminaires\s*:\s*Part-2\s*:"
+        r".*?\bFixed\s+general\s+purpose\s+luminaires\b.*$",
+        r"\g<base>-2-1",
+        display,
+    )
     display = re.sub(
         r"(?i)\s*[\(\[]\s*(?:reaffirmed|reaffirmation|reviewed|confirmed)"
         r"(?:\s+(?:in|year))?\s*[:=\-]?\s*(?:19|20)\d{2}\s*[\)\]]",
@@ -73,6 +108,45 @@ def _prepare_printed_designation(display: str) -> str:
     display = re.sub(
         r"(?i)(?<=\d)\s*/\s*-\s*((?:19|20)\d{2})\b",
         r" : \1",
+        display,
+    )
+    # API source tables commonly append edition/errata metadata and a title
+    # after the identifier. Keep only the designation and let API matching
+    # resolve bare numbers against STD/RP/SPEC catalogue variants.
+    if re.match(
+        r"(?i)^(?:API\b|(?:STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)",
+        display,
+    ):
+        api_match = re.match(
+            r"(?is)^(?:API\s+)?"
+            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)?"
+            r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
+            r"(?=\s|:|$)",
+            display,
+        )
+        if api_match:
+            kind = api_match.group("kind")
+            if kind and kind.upper() == "STANDARD":
+                kind = None
+            display = "API "
+            if kind:
+                display += f"{kind.upper()} "
+            display += api_match.group("number")
+    # Many source tables place the title after a colon, for example
+    # ``RP 500 : Hazardous area classification``. Keep colon-year editions
+    # such as ``674:2010`` and only trim when the text clearly starts prose.
+    display = re.sub(
+        r"(?is)^(?P<head>.*?\d[A-Z]?)\s*:\s*(?=(?:[A-Za-z]|\([A-Za-z]))"
+        r".*$",
+        r"\g<head>",
+        display,
+    ).strip()
+    display = re.sub(
+        r"(?i)^(?P<number>\d{4,}(?:[.-]\d+)*(?::\s*(?:19|20)\d{2})?)"
+        r"(?=\s*(?:Instrument|Dry|High|Low|Alternating|Direct|Fibre|Fiber|"
+        r"Industrial|Measurement|Requirements|Guidelines|Safety|Testing|"
+        r"Specification|Switchgear|Power|Transformer|Conduit|Luminaires)\b).*$",
+        r"\g<number>",
         display,
     )
     return display.strip(" :,-/")
@@ -201,7 +275,8 @@ SDO_IDENTIFIER_PREFIX_ALIASES = {
         "PD CEN/TR",
         "ISO/IEC",
     ),
-    "IEC": ("ISO/IEC", "ISO/TS", "ISO/TR"),
+    "IEC": ("ISO/IEC", "ISO/TS", "ISO/TR", "IEC/IEEE", "IEEE/IEC"),
+    "IEEE": ("IEC/IEEE", "IEEE/IEC"),
     "DIN": (
         "DIN EN IEC",
         "DIN EN ISO/IEC",
@@ -362,8 +437,22 @@ def identity_lookup_core_tokens(
             f"{numbered.group('root')} PART {int(numbered.group('part'))} "
             f"SECTION {int(section.group(1))}"
         )
-    elif part and re.fullmatch(r"\d{4,}", root):
+    elif (
+        part
+        and re.fullmatch(r"\d{4,}", root)
+        and not (
+            normalize_tokens(sdo_name) == "IEC"
+            and re.search(r"[-./]", core)
+        )
+    ):
         tokens.append(f"{root} PART {int(part.group(1))}")
+        # BIS catalogue numbers commonly store the part separator as
+        # punctuation (``IS 1893 : Part 3``), so the normalized part token
+        # is not always searchable with a literal LIKE pattern. Include the
+        # root only for BIS/IS; candidate identity matching below still
+        # enforces the requested part exactly.
+        if normalize_tokens(sdo_name) in {"IS", "BIS"}:
+            tokens.append(root)
     elif numbered:
         tokens.append(
             f"{numbered.group('root')} PART {int(numbered.group('part'))}"
@@ -969,6 +1058,76 @@ def _split_designation(body: str) -> Tuple[Optional[str], str]:
 def _prepare_display(display: str) -> str:
     """Collapse wording that is not part of the stored designation."""
     display = display.lstrip("/").strip()
+    # Some IEC spreadsheets combine two part/edition references in one cell,
+    # for example ``60584-1:2013 / 3:2021``. The first fully qualified
+    # designation is the searchable identity; do not turn the continuation
+    # into a malformed slash-qualified standard.
+    display = re.sub(
+        r"(?i)^(?P<primary>\d{4,}(?:[.-]\d+)*\s*:\s*(?:19|20)\d{2})"
+        r"\s*/\s*\d+\s*:\s*(?:19|20)\d{2}\s*$",
+        r"\g<primary>",
+        display,
+    )
+    display = re.sub(
+        r"(?i)^((?:IS|BIS)\s+\d+)\s*:\s*PART\s+(\d+)\s*:\s*"
+        r"((?:19|20)\d{2})\b",
+        r"\1 PART \2 : \3",
+        display,
+    )
+    roman_parts = {
+        "I": "1", "II": "2", "III": "3", "IV": "4", "V": "5",
+        "VI": "6", "VII": "7", "VIII": "8", "IX": "9", "X": "10",
+        "XI": "11", "XII": "12",
+    }
+    display = re.sub(
+        r"(?i)\b(?:PART|PT)\s+([IVXLCDM]+)\b",
+        lambda match: f"PART {roman_parts.get(match.group(1).upper(), match.group(1))}",
+        display,
+    )
+    display = re.sub(
+        r"(?i)^(?P<head>\d[\d.-]*)\s*/\s*EN\s+(?P=head)$",
+        r"\g<head>",
+        display,
+    )
+    display = re.sub(
+        r"(?is)\s*[\(\[]\s*(?:reaffirmed|reaffirmation|reviewed|confirmed)"
+        r"(?:\s+(?:in|year))?\s*[:=\-]?\s*(?:19|20)\d{2}"
+        r"\s*[\)\]].*$",
+        "",
+        display,
+    ).strip()
+    display = re.sub(
+        r"(?is)^(?P<base>\d{4,})-2Luminaires\s*:\s*Part-2\s*:"
+        r".*?\bFixed\s+general\s+purpose\s+luminaires\b.*$",
+        r"\g<base>-2-1",
+        display,
+    )
+    display = re.sub(
+        r"(?is)^(?P<head>.*?\d[A-Z]?)\s*:\s*"
+        r"(?=(?:[A-Za-z]|\([A-Za-z])).*$",
+        r"\g<head>",
+        display,
+    ).strip()
+    # Spreadsheet extraction can remove the separator between an explicit
+    # edition year and its title, such as ``61869-1: 2023General ...``.
+    display = re.sub(
+        r"(?i)^(?P<head>\d{4,}(?:[.-]\d+)*\s*:\s*(?:19|20)\d{2})"
+        r"(?=[A-Za-z]).*$",
+        r"\g<head>",
+        display,
+    )
+    # Some extracted tables concatenate the designation and title, for
+    # example ``62271-102High voltage...``. Split only before known title
+    # openings so legitimate alphanumeric suffixes such as ``802.3z`` stay
+    # part of the designation.
+    display = re.sub(
+        r"(?i)^(?P<number>\d{4,}(?:[.-]\d+)*)(?="
+        r"(?:\s*(?:Instrument|Dry|Surge|High|Low|Alternating|Direct|Fibre|Fiber|Industrial|"
+        r"Measurement|Requirements|Guidelines|Safety|Testing|"
+        r"Specification|Switchgear|Power|Transformer|Conduit|Luminaires)\b)).*$",
+        r"\g<number>",
+        display,
+    )
     display = re.sub(
         r"(?i)\(\s*((?:PART|PT|SECTION|SEC|CHAPTER|CH)\b[^)]*)\)",
         r"\1",
@@ -1102,6 +1261,19 @@ def canonicalize_search_request(
     """
     sdo = clean(sdo_name).upper()
     display = _prepare_printed_designation(clean(display_number))
+    if sdo == "API":
+        api_match = re.match(
+            r"(?is)^(?:(?:API)\s+)?"
+            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)?"
+            r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
+            r"(?=\s|:|$)",
+            display,
+        )
+        if api_match:
+            kind = api_match.group("kind")
+            if kind and kind.upper() == "STANDARD":
+                kind = None
+            display = f"API {kind.upper() + ' ' if kind else ''}{api_match.group('number')}"
     sdo, display = _catalogue_sdo_for_adoption(sdo, display)
     stated_replacement = split_stated_replacement(display)
     if stated_replacement:
@@ -1430,7 +1602,30 @@ def _qualifier_range_covers(requested_qualifier: str, candidate_qualifier: str) 
 
 def parse_identity(sdo_name: str, display_number: str) -> Dict:
     sdo = clean(sdo_name).upper()
-    value = _prepare_display(clean(display_number))
+    original_value = clean(display_number)
+    value = _prepare_display(original_value)
+    concatenated_title = (
+        value != original_value
+        and bool(re.search(r"\d[A-Za-z]", original_value))
+    )
+
+    # API source tables often append edition, errata, dates, and the words
+    # "API Standard" to the designation. Keep the API family marker and the
+    # first identifier so the normal API variant matching can resolve STD/RP/
+    # SPEC catalogue records.
+    if sdo == "API":
+        api_match = re.match(
+            r"(?is)^API\s+"
+            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB)\s+)?"
+            r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
+            r"(?=\s|:|$)",
+            value,
+        )
+        if api_match:
+            value = "API "
+            if api_match.group("kind"):
+                value += f"{api_match.group('kind').upper()} "
+            value += api_match.group("number")
 
     value = re.sub(
         r"(?i)\s*[\(\[]\s*(?:I-P|SI|IP)\s*[\)\]]",
@@ -1444,7 +1639,19 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     if series_marker:
         value = SERIES_SUFFIX_RE.sub("", value).rstrip()
 
-    body, year = extract_year(value)
+    # IEC part suffixes such as ``61386-21`` are numeric parts, not
+    # two-digit edition years. Keep the suffix available for qualifier
+    # parsing; explicit four-digit editions such as ``61386-21:2021`` still
+    # go through normal year extraction.
+    iec_numeric_part = (
+        sdo == "IEC"
+        and bool(re.fullmatch(r"\d{4,}-\d+", value))
+    )
+    body, year = (
+        (value, None)
+        if concatenated_title or iec_numeric_part
+        else extract_year(value)
+    )
     # A language tag can sit before the year. Remove it from the body so
     # ``(EN-FR)`` is not glued into the standard number.
     body = LANGUAGE_SUFFIX_RE.sub("", body).rstrip()
