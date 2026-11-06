@@ -186,6 +186,14 @@ def prepare_input_rows(
                 identity,
                 include_subsections,
             )
+            # An unqualified API publication number identifies a family when
+            # the catalogue stores separate numbered parts. Return all
+            # available parts; an explicit part qualifier remains narrowed.
+            if (
+                str(search_sdo_name or sdo_name).strip().upper() == "API"
+                and identity.get("qualifier") is None
+            ):
+                expand_family = True
             if (
                 include_subsections
                 and str(identity.get("qualifier") or "").startswith("PART:")

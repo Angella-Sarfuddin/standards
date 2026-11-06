@@ -244,6 +244,15 @@ def match_local_standards(
                         **row,
                         "skip_master_identity": bool(
                             row["identity"].get("year")
+                        ) and str(
+                            row.get("search_sdo_name") or row.get("sdo_name") or ""
+                        ).strip().upper() != "IEEE" and not (
+                            str(
+                                row.get("search_sdo_name")
+                                or row.get("sdo_name")
+                                or ""
+                            ).strip().upper() == "API"
+                            and not row["identity"].get("qualifier")
                         ),
                     }
                 )
