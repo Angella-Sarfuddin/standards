@@ -153,6 +153,13 @@ def _prepare_printed_designation(display: str) -> str:
         "",
         display,
     ).strip()
+    # Catalogue rename notes such as "(Previously CB 15000-2020)" or
+    # "(Formerly FB 1)" are history of the designation, not part of it.
+    display = re.sub(
+        r"(?is)\s*[\(\[]\s*(?:previously|formerly)\b[^\)\]]*[\)\]]?",
+        "",
+        display,
+    ).strip()
     # BIS prints the edition as "PART 2/-1989".
     display = re.sub(
         r"(?i)(?<=\d)\s*/\s*-\s*((?:19|20)\d{2})\b",
@@ -1188,6 +1195,13 @@ def _prepare_display(display: str) -> str:
         r"(?is)\s*[\(\[]\s*(?:reaffirmed|reaffirmation|reviewed|confirmed)"
         r"(?:\s+(?:in|year))?\s*[:=\-]?\s*(?:19|20)\d{2}"
         r"\s*[\)\]].*$",
+        "",
+        display,
+    ).strip()
+    # Rename history such as "(Previously CB 15000-2020)" or "(Formerly FB 1)"
+    # must not become part of the searchable identity core.
+    display = re.sub(
+        r"(?is)\s*[\(\[]\s*(?:previously|formerly)\b[^\)\]]*[\)\]]?",
         "",
         display,
     ).strip()
