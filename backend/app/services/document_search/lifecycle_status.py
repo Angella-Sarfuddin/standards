@@ -2,15 +2,28 @@
 
 import re
 
+_UNAVAILABLE_STATUS_RE = re.compile(
+    r"(?i)\b(?P<label>WITHDRAWN|WTHDRAWN|DO\s+NOT\s+USE|OBSOLETE|SUPERSEDED|"
+    r"INACTIVE|DISCONTINUED|HISTORICAL|HISTORIC|ARCHIVED)\b"
+)
+
 
 def _status_label_is_unavailable(status_name):
     """Recognize lifecycle labels that must never be reported available."""
-    return bool(
-        re.search(
-            r"(?i)\b(?:WITHDRAWN|WTHDRAWN|DO\s+NOT\s+USE|OBSOLETE|SUPERSEDED|INACTIVE|DISCONTINUED|HISTORIC(?:AL)?|ARCHIVED)\b",
-            str(status_name or ""),
-        )
-    )
+    return bool(_UNAVAILABLE_STATUS_RE.search(str(status_name or "")))
+
+
+def _normalize_unavailable_status_label(status_name):
+    """Canonical unmatched lifecycle label, or None when not unavailable."""
+    match = _UNAVAILABLE_STATUS_RE.search(str(status_name or ""))
+    if not match:
+        return None
+    label = re.sub(r"\s+", " ", match.group("label").upper()).strip()
+    if label in {"HISTORICAL", "HISTORIC"}:
+        return "HISTORICAL"
+    if label in {"WITHDRAWN", "WTHDRAWN"} or label == "DO NOT USE":
+        return "WITHDRAWN"
+    return label
 
 
 def _candidate_embedded_lifecycle_status(candidate):
@@ -19,12 +32,4 @@ def _candidate_embedded_lifecycle_status(candidate):
         str(getattr(candidate, field, "") or "")
         for field in ("standardno", "display_stdNo")
     )
-    match = re.search(
-        r"(?i)\b(WITHDRAWN|WTHDRAWN|DO\s+NOT\s+USE|OBSOLETE|SUPERSEDED|INACTIVE|"
-        r"DISCONTINUED|HISTORICAL|HISTORIC|ARCHIVED)\b",
-        value,
-    )
-    if not match:
-        return None
-    label = match.group(1).upper()
-    return "HISTORICAL" if label in {"HISTORICAL", "HISTORIC"} else label
+    return _normalize_unavailable_status_label(value)

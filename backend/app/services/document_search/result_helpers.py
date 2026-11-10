@@ -8,6 +8,9 @@ from app.core.standard_identity import (
     normalize_tokens,
     parse_identity,
 )
+from app.services.document_search.lifecycle_status import (
+    _normalize_unavailable_status_label,
+)
 
 
 def _source_request_key(result):
@@ -129,6 +132,11 @@ def deduplicate_results(results, service_class):
 
         if not result.get("matched"):
             result = dict(result)
+            lifecycle_status = _normalize_unmatched_lifecycle_status(result)
+            if lifecycle_status:
+                # Keep withdrawn/historical visible in the Not Found list
+                # instead of collapsing every unmatched row to NOT FOUND.
+                result["status"] = lifecycle_status
             reason = service_class._not_found_reason(result)
             result["not_found_reason"] = reason
             if not str(result.get("status_detail") or "").strip():
@@ -203,6 +211,30 @@ def deduplicate_results(results, service_class):
     return deduplicated
 
 
+def _normalize_unmatched_lifecycle_status(result):
+    """Recover WITHDRAWN/HISTORICAL for unmatched rows when evidence exists."""
+    direct = _normalize_unavailable_status_label(result.get("status"))
+    if direct in {"WITHDRAWN", "HISTORICAL"}:
+        return direct
+    evidence = " ".join(
+        str(value or "")
+        for value in (
+            result.get("status"),
+            result.get("status_detail"),
+            result.get("catalog_status"),
+            result.get("superseded_by"),
+            result.get("replacement_standard"),
+            ((result.get("standard") or {}) or {}).get("catalog_status")
+            if isinstance(result.get("standard"), dict)
+            else None,
+        )
+    )
+    recovered = _normalize_unavailable_status_label(evidence)
+    if recovered in {"WITHDRAWN", "HISTORICAL"}:
+        return recovered
+    return None
+
+
 def not_found_reason(result):
     """Classify unmatched rows using lifecycle evidence when available."""
     status = str(result.get("status") or "").strip().casefold()
@@ -213,6 +245,11 @@ def not_found_reason(result):
         or ""
     ).strip()
     evidence = " ".join((status, detail, replacement)).casefold()
+    lifecycle = _normalize_unmatched_lifecycle_status(result)
+    if lifecycle == "WITHDRAWN":
+        return "Withdrawn"
+    if lifecycle == "HISTORICAL":
+        return "Historical"
     if re.search(r"\bwithdrawn\b", evidence):
         return "Withdrawn"
     if re.search(r"\bdo\s+not\s+use\b", evidence):

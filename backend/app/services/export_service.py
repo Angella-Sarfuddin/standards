@@ -13,6 +13,9 @@ from app.core.standard_identity import bis_names_another_standard
 from app.services.document_search.enrichment_builder import (
     committee_display_codes,
 )
+from app.services.document_search.lifecycle_status import (
+    _normalize_unavailable_status_label,
+)
 
 
 class ExportService:
@@ -724,7 +727,13 @@ class ExportService:
                 or ExportService._not_found_reason_fallback(result)
             )
             normalized_reason = str(reason or "").strip().casefold()
-            if normalized_reason == "withdrawn":
+            lifecycle_status = ExportService._not_found_lifecycle_status(
+                result,
+                reason,
+            )
+            if lifecycle_status:
+                display_status = lifecycle_status
+            elif normalized_reason == "withdrawn":
                 display_status = "WITHDRAWN"
             elif normalized_reason == "historical":
                 display_status = "HISTORICAL"
@@ -769,6 +778,20 @@ class ExportService:
         return output
 
     @staticmethod
+    def _not_found_lifecycle_status(result, reason=None):
+        """Prefer catalogue lifecycle labels over a flat NOT FOUND export."""
+        for value in (
+            result.get("status"),
+            reason,
+            result.get("not_found_reason"),
+            result.get("status_detail"),
+        ):
+            label = _normalize_unavailable_status_label(value)
+            if label in {"WITHDRAWN", "HISTORICAL"}:
+                return label
+        return None
+
+    @staticmethod
     def _not_found_reason_fallback(result):
         """Provide useful reason labels for unmatched export payloads."""
         evidence = " ".join(
@@ -780,6 +803,11 @@ class ExportService:
                 result.get("replacement_standard"),
             )
         ).casefold()
+        lifecycle = ExportService._not_found_lifecycle_status(result)
+        if lifecycle == "WITHDRAWN":
+            return "Withdrawn"
+        if lifecycle == "HISTORICAL":
+            return "Historical"
         if re.search(r"\bwithdrawn\b", evidence):
             return "Withdrawn"
         if re.search(

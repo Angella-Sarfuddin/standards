@@ -463,9 +463,14 @@ def assemble_results(
                                 status_info.get("name")
                             )
                     ):
-                        status = str(
-                            status_info.get("name") or "UNAVAILABLE"
-                        ).upper()
+                        status = (
+                            service._normalize_unavailable_status_label(
+                                status_info.get("name")
+                            )
+                            or str(
+                                status_info.get("name") or "UNAVAILABLE"
+                            ).upper()
+                        )
                         is_match = False
                     actual_year = service._candidate_year(
                         standard,
@@ -775,17 +780,10 @@ def assemble_results(
         # NOT FOUND
         # ----------------------------------------------------
 
-        requested_edition_status = str(
-            row.get("requested_edition_status") or ""
-        ).strip().upper()
-        if re.search(r"(?i)\bDO\s+NOT\s+USE\b", requested_edition_status):
-            requested_edition_status = "WITHDRAWN"
         unavailable_edition_status = (
-            requested_edition_status
-            if service._status_label_is_unavailable(
-                requested_edition_status
+            service._normalize_unavailable_status_label(
+                row.get("requested_edition_status")
             )
-            else None
         )
         if unavailable_edition_status:
             not_found_detail = (
