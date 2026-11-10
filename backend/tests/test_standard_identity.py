@@ -1507,6 +1507,24 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(identity_matches(reaffirmed, base_edition))
         self.assertFalse(identity_matches(reaffirmed, wrong_edition))
 
+    def test_previous_and_former_designation_notes_are_not_identity(self):
+        renamed = parse_identity(
+            "NEMA",
+            "NEMA BI 50052-2025 (Previously CB 15000-2020)",
+        )
+        formerly = parse_identity(
+            "NEMA",
+            "NEMA BI 50004-2026 (Formerly FB 1)",
+        )
+        requested = parse_identity("NEMA", "BI 50052")
+
+        self.assertEqual(renamed["core_number"], "BI50052")
+        self.assertEqual(renamed["year"], 2025)
+        self.assertIsNone(renamed["qualifier"])
+        self.assertTrue(identity_matches(requested, renamed, check_year=False))
+        self.assertEqual(formerly["core_number"], "BI50004")
+        self.assertEqual(formerly["year"], 2026)
+
     def test_qualifier_only_identity_matches_separator_variants(self):
         self.assertTrue(
             self.matches(
