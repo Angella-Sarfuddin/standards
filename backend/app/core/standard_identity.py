@@ -3,6 +3,55 @@ from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 
+API_DESIGNATION_ALIASES = {
+    "STD": ("STD", "STANDARD"),
+    "RP": ("RP", "RECOMMENDED PRACTICE"),
+    "SPEC": ("SPEC", "SPECIFICATION"),
+    "SP": ("SP", "SPECIAL PUBLICATION"),
+    "TR": ("TR", "TECHNICAL REPORT"),
+    "BULL": ("BULL", "BUL", "BULLETIN"),
+    "PUBL": ("PUBL", "PUB", "PUBLICATION"),
+}
+API_DESIGNATION_PATTERN = "|".join(
+    re.escape(alias).replace(r"\ ", r"\s+")
+    for aliases in API_DESIGNATION_ALIASES.values()
+    for alias in sorted(aliases, key=len, reverse=True)
+)
+API_IDENTITY_PREFIXES = tuple(
+    f"API {designation}"
+    for designation in API_DESIGNATION_ALIASES
+)
+
+
+def _canonical_api_designation(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = normalize_tokens(value)
+    if normalized == "STANDARD":
+        return None
+    for designation, aliases in API_DESIGNATION_ALIASES.items():
+        if normalized in aliases:
+            return designation
+    return normalized
+
+
+def _api_edition_suffix(value: str, end: int) -> str:
+    match = re.match(r"\s*:\s*((?:19|20)\d{2})\b", value[end:])
+    return f" : {match.group(1)}" if match else ""
+
+
+def _api_core_index_forms(compact: str) -> List[str]:
+    forms = [compact]
+    for index in range(1, len(compact)):
+        if compact[index - 1].isdigit() == compact[index].isdigit():
+            continue
+        forms.extend(
+            compact[:index] + separator + compact[index:]
+            for separator in ("-", "/", ".", " ")
+        )
+    return list(dict.fromkeys(forms))
+
+
 YEAR_RE = re.compile(r"(?:^|[\s:()\[\]{},./-])((?:19|20)\d{2})\s*$")
 REAFFIRMATION_MARKER = (
     r"(?:R"
@@ -119,19 +168,18 @@ def _prepare_printed_designation(display: str) -> str:
     ):
         api_match = re.match(
             r"(?is)^(?:API\s+)?"
-            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)?"
+            rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
             r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
             r"(?=\s|:|$)",
             display,
         )
         if api_match:
-            kind = api_match.group("kind")
-            if kind and kind.upper() == "STANDARD":
-                kind = None
+            kind = _canonical_api_designation(api_match.group("kind"))
+            edition = _api_edition_suffix(display, api_match.end())
             display = "API "
             if kind:
-                display += f"{kind.upper()} "
-            display += api_match.group("number")
+                display += f"{kind} "
+            display += api_match.group("number") + edition
     # Many source tables place the title after a colon, for example
     # ``RP 500 : Hazardous area classification``. Keep colon-year editions
     # such as ``674:2010`` and only trim when the text clearly starts prose.
@@ -207,6 +255,11 @@ LANGUAGE_SUFFIX_RE = re.compile(
 CORRIGENDUM_RE = re.compile(
     r"(?:/|\s+)(?:COR(?:R)?(?:IGENDUM)?)\.?\s*:?\s*\d+"
     r"(?:\s*:\s*(?:19|20)\d{2})?\s*$",
+    re.IGNORECASE,
+)
+AMENDMENT_EDITION_SUFFIX_RE = re.compile(
+    r"\s*(?:\+|/|\s+)(?:A|AMD|AMEND(?:MENT)?)\s*\.?\s*\d+[A-Z]?"
+    r"\s*:\s*(?:19|20)\d{2}\s*$",
     re.IGNORECASE,
 )
 SERIES_SUFFIX_RE = re.compile(
@@ -642,6 +695,7 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         if bis_joint_publishers(prefix)
         else ()
     )
+    api_spellings = API_IDENTITY_PREFIXES if prefix == "API" else ()
     if not numbered_part and joint_spellings:
         for spelling in joint_spellings:
             patterns.extend([
@@ -653,6 +707,12 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
             f"{prefix} {compact}%",
             f"{prefix}{compact}%",
         ])
+        if api_spellings:
+            patterns.extend(
+                f"{spelling} {core_form}%"
+                for spelling in api_spellings
+                for core_form in _api_core_index_forms(compact)
+            )
         glued = normalize_identity_core(prefix)
         compact_prefix = prefix.replace(" ", "")
         if glued and glued not in {prefix, compact_prefix}:
@@ -668,7 +728,11 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         root = numbered_part.group("root")
         part = str(int(numbered_part.group("part")))
         section = numbered_part.group("section")
-        for spelling in (joint_spellings or sdo_identifier_prefixes(prefix)):
+        for spelling in (
+            joint_spellings
+            or api_spellings
+            or sdo_identifier_prefixes(prefix)
+        ):
             if len(root) >= 4:
                 patterns.append(f"{spelling} {root}%")
                 continue
@@ -846,14 +910,20 @@ def bis_joint_publishers(value: str) -> Tuple[str, ...]:
     publishers.
     """
     text = re.sub(r"\s*/\s*", " ", normalize_tokens(value).upper())
-    text = re.sub(r"^BIS\s+", "", text)
+    tokens = text.split()
+    if tokens and tokens[0] == "BIS":
+        if len(tokens) > 1 and tokens[1] == "IS":
+            tokens = tokens[1:]
+        else:
+            tokens[0] = "IS"
     publishers = []
-    for token in text.split():
+    for token in tokens:
         if token in _ADOPTION_QUALIFIER_WORDS or not re.fullmatch(r"[A-Z][A-Z0-9]*", token):
             break
         publishers.append(token)
     if len(publishers) < 2 or publishers[0] not in {"IS", "BIS"}:
         return ()
+    publishers[0] = "IS"
     return tuple(publishers)
 
 
@@ -1058,6 +1128,22 @@ def _split_designation(body: str) -> Tuple[Optional[str], str]:
 def _prepare_display(display: str) -> str:
     """Collapse wording that is not part of the stored designation."""
     display = display.lstrip("/").strip()
+    # BIS joint-adoption entries use a three-field printed form:
+    # ``IS/IEC 60079 : Part 5 : 2015``. Normalize it before the generic
+    # colon/title cleanup can mistake ``Part`` for descriptive text.
+    display = re.sub(
+        r"(?i)(?P<root>\d{4,})\s*:\s*(?:PART|PT)\s*"
+        r"(?P<part>\d+)\s*:\s*(?:SEC|SECTION)\s*"
+        r"(?P<section>\d+)\s*:\s*(?P<year>(?:19|20)\d{2})\b",
+        r"\g<root> PART \g<part> SECTION \g<section> : \g<year>",
+        display,
+    )
+    display = re.sub(
+        r"(?i)(?P<root>\d{4,})\s*:\s*(?:PART|PT)\s*"
+        r"(?P<part>\d+)\s*:\s*(?P<year>(?:19|20)\d{2})\b",
+        r"\g<root> PART \g<part> : \g<year>",
+        display,
+    )
     # Some IEC spreadsheets combine two part/edition references in one cell,
     # for example ``60584-1:2013 / 3:2021``. The first fully qualified
     # designation is the searchable identity; do not turn the continuation
@@ -1222,6 +1308,32 @@ def _catalogue_sdo_for_adoption(sdo: str, display: str) -> Tuple[str, str]:
     return sdo, display
 
 
+def _normalize_bis_joint_sdo(sdo_name: str) -> Tuple[str, Optional[str]]:
+    """Map IS/BIS plus a joint publisher label to BIS and its IS prefix."""
+    publishers = bis_joint_publishers(sdo_name)
+    if len(publishers) < 2:
+        return clean(sdo_name).upper(), None
+    prefix = "IS/" + "/".join(publishers[1:])
+    return "BIS", prefix
+
+
+def _normalize_bis_joint_display(display: str) -> str:
+    """Canonicalize spaced or slash-separated IS publisher chains."""
+    match = re.match(
+        r"(?i)^(?P<prefix>(?:BIS\s+)?(?:IS|BIS)"
+        r"(?:(?:\s*/\s*|\s+)[A-Z][A-Z0-9]*)+)"
+        r"(?=\s|[:.-]|\d)",
+        display,
+    )
+    if not match:
+        return display
+    publishers = bis_joint_publishers(match.group("prefix"))
+    if len(publishers) < 2:
+        return display
+    prefix = "IS/" + "/".join(publishers[1:])
+    return prefix + display[match.end():]
+
+
 def _strip_leading_publishers(body: str) -> str:
     """Drop adopted publisher words that sit in front of the number.
 
@@ -1259,21 +1371,29 @@ def canonicalize_search_request(
     (``AMPP-NACE``, ``AMPP-SSPC``, ``HI``). Status notes are removed from
     the number so withdrawn / edition text does not hide the designation.
     """
-    sdo = clean(sdo_name).upper()
+    sdo, joint_prefix = _normalize_bis_joint_sdo(sdo_name)
     display = _prepare_printed_designation(clean(display_number))
+    display = _normalize_bis_joint_display(display)
+    if joint_prefix and not re.match(
+        rf"(?i)^{re.escape(joint_prefix)}(?=$|[\s:/.-]|\d)",
+        display,
+    ):
+        display = f"{joint_prefix} {display}".strip()
     if sdo == "API":
         api_match = re.match(
             r"(?is)^(?:(?:API)\s+)?"
-            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)?"
+            rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
             r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
             r"(?=\s|:|$)",
             display,
         )
         if api_match:
-            kind = api_match.group("kind")
-            if kind and kind.upper() == "STANDARD":
-                kind = None
-            display = f"API {kind.upper() + ' ' if kind else ''}{api_match.group('number')}"
+            kind = _canonical_api_designation(api_match.group("kind"))
+            edition = _api_edition_suffix(display, api_match.end())
+            display = (
+                f"API {kind + ' ' if kind else ''}"
+                f"{api_match.group('number')}{edition}"
+            )
     sdo, display = _catalogue_sdo_for_adoption(sdo, display)
     stated_replacement = split_stated_replacement(display)
     if stated_replacement:
@@ -1345,6 +1465,7 @@ def canonicalize_search_request(
     display = TRAILING_NOTE_RE.sub("", display).strip(" -/")
     display = re.sub(r"(?i)(?<=\d)\s*&\s*(?=\d)", "/", display)
     display = re.sub(r"(?i)\+F\d.*$", "", display).strip(" -/")
+    display = AMENDMENT_EDITION_SUFFIX_RE.sub("", display).strip()
     display = re.sub(r"(?i)^STD\s+", "", display).strip()
 
     # Some catalog exports append a fully qualified designation after the
@@ -1604,6 +1725,8 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     sdo = clean(sdo_name).upper()
     original_value = clean(display_number)
     value = _prepare_display(original_value)
+    if sdo in {"IS", "BIS"}:
+        value = _normalize_bis_joint_display(value)
     concatenated_title = (
         value != original_value
         and bool(re.search(r"\d[A-Za-z]", original_value))
@@ -1616,16 +1739,18 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     if sdo == "API":
         api_match = re.match(
             r"(?is)^API\s+"
-            r"(?:(?P<kind>STD|RP|SPEC|BULL|PUBL|PUB)\s+)?"
+            rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
             r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
             r"(?=\s|:|$)",
             value,
         )
         if api_match:
+            edition = _api_edition_suffix(value, api_match.end())
             value = "API "
-            if api_match.group("kind"):
-                value += f"{api_match.group('kind').upper()} "
-            value += api_match.group("number")
+            kind = _canonical_api_designation(api_match.group("kind"))
+            if kind:
+                value += f"{kind} "
+            value += api_match.group("number") + edition
 
     value = re.sub(
         r"(?i)\s*[\(\[]\s*(?:I-P|SI|IP)\s*[\)\]]",
@@ -1635,6 +1760,7 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     value = WITHDRAWAL_RE.sub("", value).rstrip()
     value = LANGUAGE_SUFFIX_RE.sub("", value).rstrip()
     value = CORRIGENDUM_RE.sub("", value).rstrip()
+    value = AMENDMENT_EDITION_SUFFIX_RE.sub("", value).rstrip()
     series_marker = bool(SERIES_SUFFIX_RE.search(value))
     if series_marker:
         value = SERIES_SUFFIX_RE.sub("", value).rstrip()
