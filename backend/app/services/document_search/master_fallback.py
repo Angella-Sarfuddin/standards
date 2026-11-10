@@ -14,6 +14,23 @@ from app.core.standard_identity import (
     normalize_tokens,
 )
 
+
+def _row_search_sdo_ids(enrichment_repository, row):
+    """Catalogue owners searched for one request in a single pass.
+
+    IEEE and IEC dual-logo rows are stored under either owner. Include the
+    alias owner here so display and identity lookups do not need a second
+    waterfall search.
+    """
+    search_sdo_name = row.get("search_sdo_name") or row.get("sdo_name")
+    return enrichment_repository._identity_search_sdo_ids(
+        row.get("sdo_id"),
+        identity_pattern_prefix(
+            search_sdo_name,
+            (row.get("identity") or {}).get("identifier_prefix"),
+        ),
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +57,7 @@ def find_master_matches(
     pairs = []
 
     for row in unresolved_rows:
+        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
 
         for variant in row[
             "identity"
@@ -47,13 +65,13 @@ def find_master_matches(
             "variants",
             [],
         ):
-
-            pairs.append(
-                (
-                    row["sdo_id"],
-                    variant,
+            for search_sdo_id in search_sdo_ids:
+                pairs.append(
+                    (
+                        search_sdo_id,
+                        variant,
+                    )
                 )
-            )
 
     pairs = list(
         dict.fromkeys(pairs)
@@ -79,8 +97,10 @@ def find_master_matches(
     standard_pairs = list(pairs)
     for row in unresolved_rows:
         full = row.get("full_display_number")
-        if row.get("sdo_id") and full:
-            standard_pairs.append((row["sdo_id"], full))
+        if not full:
+            continue
+        for search_sdo_id in _row_search_sdo_ids(enrichment_repository, row):
+            standard_pairs.append((search_sdo_id, full))
 
     standard_pairs = list(dict.fromkeys(standard_pairs))
 
@@ -153,27 +173,31 @@ def find_master_matches(
 
     for row in unresolved_rows:
         row_masters = []
+        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
         for token in variant_tokens(row):
-            row_masters.extend(
-                display_grouped.get(
-                    (
-                        row["sdo_id"],
-                        token,
-                    ),
-                    [],
+            for search_sdo_id in search_sdo_ids:
+                row_masters.extend(
+                    display_grouped.get(
+                        (
+                            search_sdo_id,
+                            token,
+                        ),
+                        [],
+                    )
                 )
-            )
         full = row.get("full_display_number")
         if full:
-            row_masters.extend(
-                display_grouped.get(
-                    (
-                        row["sdo_id"],
-                        normalize_tokens(full),
-                    ),
-                    [],
+            full_token = normalize_tokens(full)
+            for search_sdo_id in search_sdo_ids:
+                row_masters.extend(
+                    display_grouped.get(
+                        (
+                            search_sdo_id,
+                            full_token,
+                        ),
+                        [],
+                    )
                 )
-            )
         row_masters = unique_standards(row_masters)
 
         if row.get("skip_master_identity"):
@@ -346,24 +370,24 @@ def find_master_matches(
         # Display variants
         # ----------------------------------------------------
 
+        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
         for variant in row[
             "identity"
         ].get(
             "variants",
             [],
         ):
-
-            candidates.extend(
-                grouped.get(
-                    (
-                        row["sdo_id"],
-                        normalize_tokens(
-                            variant
+            variant_token = normalize_tokens(variant)
+            for search_sdo_id in search_sdo_ids:
+                candidates.extend(
+                    grouped.get(
+                        (
+                            search_sdo_id,
+                            variant_token,
                         ),
-                    ),
-                    [],
+                        [],
+                    )
                 )
-            )
 
         # ----------------------------------------------------
         # Designation-neutral candidates
@@ -380,29 +404,31 @@ def find_master_matches(
             normalized_core = normalize_identity_core(
                 core
             )
-
-            possible_masters = (
-                master_identity_index.get(
-                    (
-                        row["sdo_id"],
-                        normalize_tokens(
-                            row.get("search_sdo_name") or row["sdo_name"]
-                        ),
-                        normalized_core,
-                    ),
-                    {},
-                ).values()
+            request_sdo_name = normalize_tokens(
+                row.get("search_sdo_name") or row["sdo_name"]
             )
 
-            for master in possible_masters:
+            for search_sdo_id in search_sdo_ids:
+                possible_masters = (
+                    master_identity_index.get(
+                        (
+                            search_sdo_id,
+                            request_sdo_name,
+                            normalized_core,
+                        ),
+                        {},
+                    ).values()
+                )
 
-                if (
-                    master_candidate_matches_identity(master, row)
-                    or candidate_is_part_of_root(master, row)
-                ):
-                    candidates.append(
-                        master
-                    )
+                for master in possible_masters:
+
+                    if (
+                        master_candidate_matches_identity(master, row)
+                        or candidate_is_part_of_root(master, row)
+                    ):
+                        candidates.append(
+                            master
+                        )
 
         nace_number = nace_publication_number(
             row.get("search_sdo_name") or row.get("sdo_name") or "",

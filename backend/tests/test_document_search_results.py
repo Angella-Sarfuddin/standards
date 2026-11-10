@@ -4,7 +4,18 @@ from types import SimpleNamespace
 
 from openpyxl import load_workbook
 
+from app.core.standard_identity import (
+    designation_is_ieee_iec_dual_logo,
+    ieee_iec_joint_prefix,
+    identity_lookup_core_tokens,
+)
 from app.services.document_search import result_helpers
+from app.services.document_search.identity_discovery import (
+    build_identity_candidate_index,
+)
+from app.services.document_search.result_assembly import (
+    _requested_edition_year,
+)
 from app.services.document_search.enrichment_builder import (
     committee_display_codes,
 )
@@ -54,6 +65,29 @@ class ResolvedEditionReportingTests(unittest.TestCase):
             "customer-list.xlsx",
             8,
             "IS3025PT24:1986",
+        )
+
+    def test_series_edition_year_does_not_constrain_individual_parts(self):
+        self.assertIsNone(
+            _requested_edition_year(
+                {
+                    "identity": {
+                        "qualifier": "SERIES",
+                        "year": 2026,
+                    }
+                }
+            )
+        )
+        self.assertEqual(
+            _requested_edition_year(
+                {
+                    "identity": {
+                        "qualifier": "PART:6",
+                        "year": 2010,
+                    }
+                }
+            ),
+            2010,
         )
 
     def normalize(self, results):
@@ -310,6 +344,44 @@ class ResolvedEditionReportingTests(unittest.TestCase):
             workbook.close()
 
         self.assertEqual(standards, ["IS 3025 PT 99 : 2015"])
+
+
+class IeeeIecDualLogoLookupTests(unittest.TestCase):
+    def test_hyphenated_ieee_lookup_keeps_catalogue_spelling(self):
+        self.assertEqual(
+            identity_lookup_core_tokens("IEEE", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
+        self.assertTrue(
+            designation_is_ieee_iec_dual_logo(
+                "IEC/IEEE 60076-57-1202:2017 (EN-FR)"
+            )
+        )
+        self.assertFalse(
+            designation_is_ieee_iec_dual_logo("IEEE C57.12.00-2021")
+        )
+        self.assertTrue(ieee_iec_joint_prefix("IEEE", "IEC/IEEE"))
+        self.assertTrue(ieee_iec_joint_prefix("IEC", "IEEE/IEC"))
+        self.assertFalse(ieee_iec_joint_prefix("ISO", "IEC/IEEE"))
+
+    def test_dual_logo_rows_are_indexed_for_the_other_publisher(self):
+        candidate = SimpleNamespace(
+            id=274355,
+            sdo_id=16,
+            display_stdNo="IEC/IEEE 60076-57-1202:2017 (EN-FR)",
+            standardno="IEC/IEEE 60076-57-1202 (EN-FR)",
+        )
+        index = build_identity_candidate_index(
+            [candidate],
+            [
+                {
+                    "sdo_id": 25,
+                    "sdo_name": "IEEE",
+                    "search_sdo_name": "IEEE",
+                }
+            ],
+        )
+        self.assertIn(candidate.id, index[(16, "IEEE", "6007657")])
 
 
 class CommitteeCodeDisplayTests(unittest.TestCase):

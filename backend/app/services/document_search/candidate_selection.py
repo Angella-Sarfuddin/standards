@@ -3,6 +3,7 @@
 import re
 
 from app.core.standard_identity import (
+    ieee_iec_joint_prefix,
     normalize_identity_core,
     parse_identity,
     standard_number_year,
@@ -285,20 +286,13 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
             )
             or 0
         )
+        candidate_prefix = candidate_identity.get("identifier_prefix") or ""
         exact_prefix = int(
-            service_class._normalized_identifier_prefix(
-                candidate_identity.get("identifier_prefix") or ""
-            )
+            service_class._normalized_identifier_prefix(candidate_prefix)
             == requested_prefix
-            or (
-                str(row.get("search_sdo_name") or row.get("sdo_name") or "")
-                .strip()
-                .upper()
-                == "IEEE"
-                and str(
-                    candidate_identity.get("identifier_prefix") or ""
-                ).replace(" ", "").upper()
-                in {"IEC/IEEE", "IEEE/IEC"}
+            or ieee_iec_joint_prefix(
+                row.get("search_sdo_name") or row.get("sdo_name"),
+                candidate_prefix,
             )
         )
         # A later reaffirmation of the same edition outranks an older
@@ -426,27 +420,29 @@ def _select_master_candidate(
     # Preserve an explicit designation family (such as IS/IEC) before
     # choosing the newest year. Different catalogue prefixes can share
     # the same numeric core and part while representing different series.
-    return max(
-        candidates,
-        key=lambda candidate: (
-            int(
-                service_class._normalized_identifier_prefix(
-                    parse_identity(
-                        row.get("search_sdo_name") or row["sdo_name"],
-                        candidate.display_stdNo or candidate.standardno or "",
-                    ).get("identifier_prefix") or ""
-                ) == requested_prefix
-            ),
-            service_class._candidate_year(
-                candidate,
-                row.get("search_sdo_name") or row["sdo_name"],
-            ) or 0,
+    # IEEE and IEC dual-logo rows count as the same family for either
+    # publisher request so the newer joint edition can win.
+    search_sdo_name = row.get("search_sdo_name") or row["sdo_name"]
+
+    def ranking(candidate):
+        candidate_prefix = parse_identity(
+            search_sdo_name,
+            candidate.display_stdNo or candidate.standardno or "",
+        ).get("identifier_prefix") or ""
+        exact_prefix = int(
+            service_class._normalized_identifier_prefix(candidate_prefix)
+            == requested_prefix
+            or ieee_iec_joint_prefix(search_sdo_name, candidate_prefix)
+        )
+        return (
+            exact_prefix,
+            service_class._candidate_year(candidate, search_sdo_name) or 0,
             service_class._candidate_reaffirmation_year(candidate),
             int(getattr(candidate, "DocumentAvailability", 1) == 1),
             int(getattr(candidate, "recent", 0) == 1),
-        ),
-        default=None,
-    )
+        )
+
+    return max(candidates, key=ranking, default=None)
 
 def _select_master_candidates(candidates, row, status_map=None, *, service_class):
     service_class._record_requested_edition_status(
@@ -628,20 +624,13 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
             candidate.standardno
         ) or 0
         reaffirmed = service_class._candidate_reaffirmation_year(candidate)
+        candidate_prefix = candidate_identity.get("identifier_prefix") or ""
         exact_prefix = int(
-            service_class._normalized_identifier_prefix(
-                candidate_identity.get("identifier_prefix") or ""
-            )
+            service_class._normalized_identifier_prefix(candidate_prefix)
             == requested_prefix
-            or (
-                str(row.get("search_sdo_name") or row.get("sdo_name") or "")
-                .strip()
-                .upper()
-                == "IEEE"
-                and str(
-                    candidate_identity.get("identifier_prefix") or ""
-                ).replace(" ", "").upper()
-                in {"IEC/IEEE", "IEEE/IEC"}
+            or ieee_iec_joint_prefix(
+                row.get("search_sdo_name") or row.get("sdo_name"),
+                candidate_prefix,
             )
         )
         # API catalogue rows can use a different prefix for a newer
