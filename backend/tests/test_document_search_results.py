@@ -8,6 +8,7 @@ from app.core.standard_identity import (
     designation_is_ieee_iec_dual_logo,
     ieee_iec_joint_prefix,
     identity_lookup_core_tokens,
+    parse_identity,
 )
 from app.services.document_search import result_helpers
 from app.services.document_search.identity_discovery import (
@@ -344,6 +345,124 @@ class ResolvedEditionReportingTests(unittest.TestCase):
             workbook.close()
 
         self.assertEqual(standards, ["IS 3025 PT 99 : 2015"])
+
+
+class NotFoundLifecycleStatusTests(unittest.TestCase):
+    def normalize(self, results):
+        return result_helpers.deduplicate_results(results, _SearchService)
+
+    def test_unmatched_withdrawn_status_is_preserved(self):
+        results = self.normalize(
+            [
+                {
+                    "requested_sdo": "ASME",
+                    "requested_standard": "B18.2.3.5M : 1979",
+                    "matched": False,
+                    "status": "WITHDRAWN",
+                    "status_detail": (
+                        "The requested edition is withdrawn."
+                    ),
+                    "standard": None,
+                    "_source_request_identity": (
+                        "list.xlsx",
+                        3,
+                        "B18.2.3.5M:1979",
+                    ),
+                }
+            ]
+        )
+        self.assertEqual(results[0]["status"], "WITHDRAWN")
+        self.assertEqual(results[0]["not_found_reason"], "Withdrawn")
+
+        workbook = load_workbook(
+            BytesIO(
+                ExportService.export_not_found_excel(results).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+        self.assertEqual(rows[0][2], "WITHDRAWN")
+
+    def test_not_found_label_recovers_historical_from_detail(self):
+        results = self.normalize(
+            [
+                {
+                    "requested_sdo": "ASME",
+                    "requested_standard": "B18.2.3.5M : 1979",
+                    "matched": False,
+                    "status": "NOT FOUND",
+                    "status_detail": (
+                        "Requested edition is marked HISTORICAL in the "
+                        "catalogue and is not available."
+                    ),
+                    "standard": None,
+                    "_source_request_identity": (
+                        "list.xlsx",
+                        4,
+                        "B18.2.3.5M:1979",
+                    ),
+                }
+            ]
+        )
+        self.assertEqual(results[0]["status"], "HISTORICAL")
+        self.assertEqual(results[0]["not_found_reason"], "Historical")
+
+    def test_unrelated_active_candidate_does_not_hide_withdrawn_status(self):
+        row = {
+            "sdo_name": "ASME",
+            "search_sdo_name": "ASME",
+            "requested_sdo_name": "ASME",
+            "identity": parse_identity("ASME", "B18.2.3.5M"),
+        }
+        withdrawn = SimpleNamespace(
+            id=1,
+            status_id=10,
+            standardno="B18.2.3.5M",
+            display_stdNo="ASME B18.2.3.5M : 1979",
+            standardyear=1979,
+        )
+        unrelated_active = SimpleNamespace(
+            id=2,
+            status_id=1,
+            standardno="B16.5",
+            display_stdNo="ASME B16.5 : 2020",
+            standardyear=2020,
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [unrelated_active, withdrawn],
+            row,
+            {
+                1: {"name": "ACTIVE", "cart_show": 1, "std_show": 1},
+                10: {"name": "WITHDRAWN", "cart_show": 0, "std_show": 0},
+            },
+        )
+        self.assertEqual(row["requested_edition_status"], "WITHDRAWN")
+
+    def test_bis_withdrawn_edition_status_is_recorded(self):
+        row = {
+            "sdo_name": "BIS",
+            "search_sdo_name": "BIS",
+            "requested_sdo_name": "IS",
+            "identity": parse_identity("IS", "IS 1234 : 1990"),
+        }
+        withdrawn = SimpleNamespace(
+            id=9,
+            status_id=3,
+            standardno="IS 1234",
+            display_stdNo="IS 1234 : 1990",
+            standardyear=1990,
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [withdrawn],
+            row,
+            {3: {"name": "WITHDRAWN", "cart_show": 0, "std_show": 0}},
+        )
+        self.assertEqual(row["requested_edition_status"], "WITHDRAWN")
 
 
 class IeeeIecDualLogoLookupTests(unittest.TestCase):
