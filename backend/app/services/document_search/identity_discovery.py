@@ -2,9 +2,11 @@
 
 from app.core.standard_identity import (
     canonicalize_search_request,
+    designation_is_ieee_iec_dual_logo,
     identity_index_cores,
     identity_lookup_core_tokens,
     identity_pattern_prefix,
+    ieee_iec_joint_request,
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
@@ -113,6 +115,7 @@ def discover_identity_candidates(identity_lookup_rows, repository):
 
 def build_identity_candidate_index(candidates, rows):
     sdo_names_by_id = {}
+    joint_request_names = set()
 
     for row in rows:
         sdo_id = row.get("sdo_id")
@@ -123,15 +126,22 @@ def build_identity_candidate_index(candidates, rows):
                 sdo_id,
                 set(),
             ).add(sdo_name)
+            if ieee_iec_joint_request(sdo_name):
+                joint_request_names.add(sdo_name)
 
     index = {}
     parsed_identities = {}
 
     for candidate in candidates:
-        sdo_names = sdo_names_by_id.get(
-            candidate.sdo_id,
-            (),
-        )
+        sdo_names = set(sdo_names_by_id.get(candidate.sdo_id, ()))
+        # Dual-logo IEC/IEEE rows are stored under one owner. Index them
+        # under the other publisher's request name in the same pass so an
+        # IEEE sheet line can resolve the IEC dual-logo edition.
+        if joint_request_names and designation_is_ieee_iec_dual_logo(
+            getattr(candidate, "display_stdNo", None),
+            getattr(candidate, "standardno", None),
+        ):
+            sdo_names.update(joint_request_names)
 
         for sdo_name in sdo_names:
             for value in (

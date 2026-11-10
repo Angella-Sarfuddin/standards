@@ -31,6 +31,13 @@ def candidate_has_database_document(candidate, enrichment_map):
     )
 
 
+def _requested_edition_year(row):
+    identity = row.get("identity") or {}
+    if identity.get("qualifier") == "SERIES":
+        return None
+    return identity.get("year")
+
+
 def assemble_results(
     service,
     started,
@@ -76,7 +83,7 @@ def assemble_results(
                 getattr(standard, "standardno", ""),
             )
         ).replace(" ", "").upper()
-        if requested_sdo == "IEEE" and (
+        if requested_sdo in {"IEEE", "IEC"} and (
             "IEC/IEEE" in candidate_number or "IEEE/IEC" in candidate_number
         ):
             return True
@@ -412,7 +419,12 @@ def assemble_results(
             templates = []
             for standard in standards_by_id.values():
                 is_master = hasattr(standard, "standardyear")
-                requested_year = row["identity"].get("year")
+                is_series_request = (
+                    row["identity"].get("qualifier") == "SERIES"
+                )
+                # The year on a series request identifies the requested
+                # series/version, not a required edition year for every part.
+                requested_year = _requested_edition_year(row)
                 is_match = True
                 if is_master:
                     data = service.format_master_standard(standard)
@@ -451,9 +463,14 @@ def assemble_results(
                                 status_info.get("name")
                             )
                     ):
-                        status = str(
-                            status_info.get("name") or "UNAVAILABLE"
-                        ).upper()
+                        status = (
+                            service._normalize_unavailable_status_label(
+                                status_info.get("name")
+                            )
+                            or str(
+                                status_info.get("name") or "UNAVAILABLE"
+                            ).upper()
+                        )
                         is_match = False
                     actual_year = service._candidate_year(
                         standard,
@@ -481,7 +498,13 @@ def assemble_results(
                 requested_lifecycle_status = str(
                     row.get("requested_edition_status") or ""
                 ).strip().upper()
-                if service._requested_edition_lifecycle_status(row, actual_year):
+                if (
+                    not is_series_request
+                    and service._requested_edition_lifecycle_status(
+                        row,
+                        actual_year,
+                    )
+                ):
                     # A duplicated catalogue record can be incorrectly
                     # marked ACTIVE even when the same requested edition
                     # has an explicit Historical/Withdrawn lifecycle row.
@@ -757,17 +780,10 @@ def assemble_results(
         # NOT FOUND
         # ----------------------------------------------------
 
-        requested_edition_status = str(
-            row.get("requested_edition_status") or ""
-        ).strip().upper()
-        if re.search(r"(?i)\bDO\s+NOT\s+USE\b", requested_edition_status):
-            requested_edition_status = "WITHDRAWN"
         unavailable_edition_status = (
-            requested_edition_status
-            if service._status_label_is_unavailable(
-                requested_edition_status
+            service._normalize_unavailable_status_label(
+                row.get("requested_edition_status")
             )
-            else None
         )
         if unavailable_edition_status:
             not_found_detail = (

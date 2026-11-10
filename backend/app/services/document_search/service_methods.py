@@ -741,13 +741,12 @@ class DocumentSearchServiceMethods:
     @staticmethod
     def _record_requested_edition_status(candidates, row, status_map=None):
         requested_year = (row.get("identity") or {}).get("year")
-        if not status_map or str(
-            row.get("requested_sdo_name") or row.get("sdo_name") or ""
-        ).strip().upper() in {"BIS", "IS"}:
+        if not status_map:
             return
         identity_candidates = [
-            candidate for candidate in candidates or []
-            and DocumentSearchService._candidate_matches_identity(
+            candidate
+            for candidate in candidates or []
+            if DocumentSearchService._candidate_matches_identity(
                 candidate,
                 row,
             )
@@ -814,19 +813,14 @@ class DocumentSearchServiceMethods:
                     or status_info.get("name")
                     or ""
                 ).strip()
-                if DocumentSearchService._status_label_is_unavailable(
-                    status_name
-                ):
-                    row["requested_edition_status"] = (
-                        "WITHDRAWN"
-                        if re.search(
-                            r"(?i)\bDO\s+NOT\s+USE\b",
-                            status_name,
-                        )
-                        else status_name.upper()
+                normalized = (
+                    DocumentSearchService._normalize_unavailable_status_label(
+                        status_name
                     )
-                else:
-                    row["requested_edition_status"] = "NOT AVAILABLE"
+                )
+                row["requested_edition_status"] = (
+                    normalized or "NOT AVAILABLE"
+                )
                 return
 
     @staticmethod
@@ -1012,6 +1006,12 @@ class DocumentSearchServiceMethods:
         )
 
     @staticmethod
+    def _normalize_unavailable_status_label(status_name):
+        return lifecycle_status._normalize_unavailable_status_label(
+            status_name
+        )
+
+    @staticmethod
     def _candidate_embedded_lifecycle_status(candidate):
         return lifecycle_status._candidate_embedded_lifecycle_status(
             candidate
@@ -1104,7 +1104,12 @@ class DocumentSearchServiceMethods:
             or int(status_info.get("std_show") or 0) != 1
             or DocumentSearchService._status_label_is_unavailable(status_name)
         ):
-            return status_name.upper(), False
+            return (
+                DocumentSearchService._normalize_unavailable_status_label(
+                    status_name
+                )
+                or status_name.upper()
+            ), False
         if DocumentSearchService._is_bsb_internal_only(standard):
             return "NOT FOUND", False
         return "AVAILABLE", True
@@ -1127,11 +1132,8 @@ class DocumentSearchServiceMethods:
                 return None
         except (TypeError, ValueError):
             return None
-        status = str(row.get("requested_edition_status") or "").strip().upper()
-        return (
-            status
-            if DocumentSearchService._status_label_is_unavailable(status)
-            else None
+        return DocumentSearchService._normalize_unavailable_status_label(
+            row.get("requested_edition_status")
         )
 
     @staticmethod

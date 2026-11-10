@@ -4,6 +4,7 @@ import re
 
 from app.core.standard_identity import (
     identity_matches,
+    ieee_iec_joint_prefix,
     normalize_identity_core,
     parse_identity,
     reaffirmation_year,
@@ -227,11 +228,14 @@ def _select_best_current_candidate(candidates, row, status_map=None, *, service_
             row.get("search_sdo_name") or row["sdo_name"],
             candidate.display_stdNo or candidate.standardno or "",
         )
+        candidate_prefix = candidate_identity.get("identifier_prefix") or ""
         exact_prefix = int(
-            service_class._normalized_identifier_prefix(
-                candidate_identity.get("identifier_prefix") or ""
-            )
+            service_class._normalized_identifier_prefix(candidate_prefix)
             == requested_prefix
+            or ieee_iec_joint_prefix(
+                row.get("search_sdo_name") or row.get("sdo_name"),
+                candidate_prefix,
+            )
         )
         recent = int(getattr(candidate, "recent", 0) == 1)
         is_master_record = int(hasattr(candidate, "standardyear"))
