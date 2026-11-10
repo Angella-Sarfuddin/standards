@@ -217,7 +217,7 @@ class EnrichmentRepository:
         return (
             self.db.query(StandardMaster)
             .filter(
-                StandardMaster.sdo_id == search_sdo_id,
+                StandardMaster.sdo_id == sdo_id,
                 StandardMaster.standardno.ilike("%MR0103%"),
                 StandardMaster.standardno.ilike("%17945%"),
                 StandardMaster.status == 1,
@@ -230,7 +230,7 @@ class EnrichmentRepository:
         return (
             self.db.query(StandardMaster)
             .filter(
-                StandardMaster.sdo_id == search_sdo_id,
+                StandardMaster.sdo_id == sdo_id,
                 StandardMaster.standardno.in_(["ANSI/HI 14.6", "HI 14.6"]),
                 StandardMaster.status == 1,
             )
