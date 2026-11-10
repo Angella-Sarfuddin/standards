@@ -47,6 +47,10 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_iec_year_and_title_concatenation_is_not_part_of_designation(self):
+        requested = parse_identity("IEC", "61508:2010 PART 6")
+        self.assertEqual(requested["core_number"], "61508")
+        self.assertEqual(requested["qualifier"], "PART:6")
+        self.assertEqual(requested["year"], 2010)
         self.assertEqual(
             canonicalize_search_request(
                 "IEC",
@@ -222,12 +226,19 @@ class StandardIdentityTests(unittest.TestCase):
             identity_lookup_core_tokens("IEC", "60076-57", "PART:1202"),
             ["60076-57"],
         )
+        self.assertEqual(
+            identity_lookup_core_tokens("IEEE", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
         joint = parse_identity(
             "IEEE", "IEC/IEEE 60076-57-1202:2017 (EN-FR)"
         )
         standalone = parse_identity("IEEE", "60076-57-1202:2017")
         self.assertEqual(joint["core_number"], standalone["core_number"])
         self.assertEqual(joint["qualifier"], standalone["qualifier"])
+        self.assertTrue(
+            identity_matches(standalone, joint, check_year=False)
+        )
 
     def test_bis_joint_publisher_labels_normalize_to_bis_catalogue(self):
         for label, publisher in (

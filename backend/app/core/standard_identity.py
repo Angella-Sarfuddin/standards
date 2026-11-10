@@ -493,11 +493,11 @@ def identity_lookup_core_tokens(
     elif (
         part
         and re.fullmatch(r"\d{4,}", root)
-        and not (
-            normalize_tokens(sdo_name) == "IEC"
-            and re.search(r"[-./]", core)
-        )
+        and not re.search(r"[-./]", core)
     ):
+        # Hyphenated catalogue ids such as ``60076-57-1202`` keep the
+        # separators in the lookup token. Searching ``6007657 PART 1202``
+        # misses those rows because they never spell the word PART.
         tokens.append(f"{root} PART {int(part.group(1))}")
         # BIS catalogue numbers commonly store the part separator as
         # punctuation (``IS 1893 : Part 3``), so the normalized part token
@@ -1128,6 +1128,15 @@ def _split_designation(body: str) -> Tuple[Optional[str], str]:
 def _prepare_display(display: str) -> str:
     """Collapse wording that is not part of the stored designation."""
     display = display.lstrip("/").strip()
+    # Some source lists put the publication year between the root number and
+    # an explicit part, e.g. ``61508:2010 PART 6``. Move it after the part so
+    # normal year extraction does not fold the year into the standard number.
+    display = re.sub(
+        r"(?i)(?P<root>\d{4,})\s*:\s*(?P<year>(?:19|20)\d{2})\s+"
+        r"(?:PART|PT)\s*(?P<part>\d+)\b",
+        r"\g<root> PART \g<part> : \g<year>",
+        display,
+    )
     # BIS joint-adoption entries use a three-field printed form:
     # ``IS/IEC 60079 : Part 5 : 2015``. Normalize it before the generic
     # colon/title cleanup can mistake ``Part`` for descriptive text.
@@ -1640,6 +1649,27 @@ def designation_cites_nace_number(value: str, number: str) -> bool:
         rf"(?i)\bNACE\s+NO\.?\s*{int(number)}\b",
         str(value or ""),
     ))
+
+
+def designation_is_ieee_iec_dual_logo(*values: str) -> bool:
+    """True when the catalogue text is an IEC/IEEE or IEEE/IEC designation."""
+    text = " ".join(str(value or "") for value in values).replace(" ", "").upper()
+    return "IEC/IEEE" in text or "IEEE/IEC" in text
+
+
+def ieee_iec_joint_request(sdo_name: str) -> bool:
+    """True when this request may resolve through the dual-logo catalogue."""
+    return normalize_tokens(sdo_name) in {"IEEE", "IEC"}
+
+
+def ieee_iec_joint_prefix(requested_sdo: str, candidate_prefix: str) -> bool:
+    """True when a dual-logo prefix serves an IEEE or IEC request."""
+    if not ieee_iec_joint_request(requested_sdo):
+        return False
+    return str(candidate_prefix or "").replace(" ", "").upper() in {
+        "IEC/IEEE",
+        "IEEE/IEC",
+    }
 
 
 def _roman_numeral_value(value: str) -> Optional[int]:
