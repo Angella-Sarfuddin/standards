@@ -69,6 +69,73 @@ REAFFIRMATION_RE = re.compile(
     r"\s*[:=\-]?\s*((?:19|20)\d{2})\s*(?:\)|\])?\s*$",
     re.IGNORECASE,
 )
+# Compact catalogue review notes such as ``(R2020)``, ``(S2025)``, or
+# ``(R2020,S2025)``. These are lifecycle markers, not part of the number.
+COMPACT_REVIEW_NOTE_RE = re.compile(
+    r"(?i)\s*[\(\[]\s*(?:[RS]\s*(?:19|20)\d{2}\s*[,;/]*)+[\)\]]?"
+)
+COMPACT_REVIEW_YEAR_RE = re.compile(
+    r"(?i)\b[RS]\s*((?:19|20)\d{2})\b"
+)
+# Parenthetical citations such as ``(IEC PUB 60-1 : 2010)`` or
+# ``(ISO 4049 : 2019, MOD)`` are references, not part of the designation.
+_PARENTHETICAL_CITATION_RE = re.compile(
+    r"(?is)\s*[\(\[]\s*"
+    r"(?:ISO|IEC|IEEE|EN|BS|DIN|ASTM|ANSI|ASME|CEN|CENELEC|CISPR|"
+    r"JIS|SAE|API|NEMA|UL|PUB)"
+    r"(?:\s*/\s*(?:ISO|IEC|IEEE|EN|CISPR|TS|TR|PAS|PUB))*"
+    r"[^\)\]]*"
+    r"[\)\]]?"
+)
+# Short legacy aliases such as ``(VE2)`` or ``(RN1)`` are history of the
+# designation family, not part of the searchable identity core.
+_LEGACY_ALIAS_PAREN_RE = re.compile(
+    r"(?is)\s*[\(\[]\s*"
+    r"(?!(?:previously|formerly|formally|former|reaffirmed|withdrawn|"
+    r"iso|iec|ieee|en|bs|din|astm|ansi|asme|cen|cenelec|spanish|"
+    r"en\s+espanol)\b)"
+    r"[A-Z]{1,8}(?:\s*/\s*[A-Z]{1,8})?"
+    r"(?:\s*-?\s*\d{1,4}(?:\.\d+)*)?"
+    r"[A-Z]?"
+    r"\s*[\)\]]"
+)
+_RENAME_HISTORY_PAREN_RE = re.compile(
+    r"(?is)\s*[\(\[]\s*(?:previously|formerly|formally|former)\b"
+    r"[^\)\]]*[\)\]]?"
+)
+# Part/section parentheses are identity-bearing. Everything else in
+# parentheses is catalogue metadata (years, review notes, rename history,
+# language tags, aliases, citations, titles).
+_IDENTITY_BEARING_PAREN_RE = re.compile(
+    r"(?is)\s*[\(\[]\s*(?:PARTS?|PTS?|SECTIONS?|SECS?)\b[^\)\]]*[\)\]]?"
+)
+
+
+def _strip_metadata_parentheses(display: str) -> str:
+    """Remove non-identity parentheticals from designation text.
+
+    Keeps ``(Part …)`` / ``(Section …)``. Strips bare years such as
+    ``(2025)``, review notes, rename history, short aliases, citations,
+    and other trailing catalogue notes so they cannot pollute the core.
+    """
+    text = str(display or "")
+    if not text:
+        return text
+
+    protected = []
+
+    def _protect(match):
+        protected.append(match.group(0))
+        return f" __KEEPPAREN{len(protected) - 1}__ "
+
+    text = _IDENTITY_BEARING_PAREN_RE.sub(_protect, text)
+    text = re.sub(r"(?is)\s*[\(\[][^\)\]]*[\)\]]", " ", text)
+    text = re.sub(r"(?is)\s*[\(\[].*$", " ", text)
+    for index, value in enumerate(protected):
+        text = text.replace(f"__KEEPPAREN{index}__", value)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 WITHDRAWAL_RE = re.compile(
     r"(?:\s*/\s*|\s*\(\s*|\s*[-–—]\s*)(?:WITHDRAWN|WTHDRAWN|OBSOLETE|SUPERSEDED)\b.*$",
     re.IGNORECASE,
@@ -153,13 +220,11 @@ def _prepare_printed_designation(display: str) -> str:
         "",
         display,
     ).strip()
-    # Catalogue rename notes such as "(Previously CB 15000-2020)" or
-    # "(Formerly FB 1)" are history of the designation, not part of it.
-    display = re.sub(
-        r"(?is)\s*[\(\[]\s*(?:previously|formerly)\b[^\)\]]*[\)\]]?",
-        "",
-        display,
-    ).strip()
+    display = COMPACT_REVIEW_NOTE_RE.sub("", display).strip()
+    # Strip all non-identity parentheses in one pass so catalogue notes
+    # such as "(2025)", "(VE2)", "(Previously …)", or "(IEC …)" never
+    # become part of the searchable core.
+    display = _strip_metadata_parentheses(display)
     # BIS prints the edition as "PART 2/-1989".
     display = re.sub(
         r"(?i)(?<=\d)\s*/\s*-\s*((?:19|20)\d{2})\b",
@@ -209,8 +274,15 @@ def _prepare_printed_designation(display: str) -> str:
 
 def reaffirmation_year(value: str) -> Optional[int]:
     """Return a standard's reaffirmation/review year without treating it as edition year."""
-    match = REAFFIRMATION_RE.search(clean(value))
-    return int(match.group(1)) if match else None
+    text = clean(value)
+    years = [
+        int(year)
+        for year in COMPACT_REVIEW_YEAR_RE.findall(text)
+    ]
+    match = REAFFIRMATION_RE.search(text)
+    if match:
+        years.append(int(match.group(1)))
+    return max(years) if years else None
 # Excel label -> (identity SDO used for parsing, catalogue title used for sdo_id).
 SDO_LOOKUP_ALIASES = {
     "GPA": ("GLOBAL", "GLOBAL"),
@@ -1004,11 +1076,33 @@ def sdo_identifier_prefixes(sdo_name: str) -> Tuple[str, ...]:
     return tuple(dict.fromkeys((*names, *aliases)))
 
 
+def _finalize_extracted_year(
+    body: str,
+    year: Optional[int],
+) -> Tuple[str, Optional[int]]:
+    """Drop leftover edition years so they cannot glue into the core.
+
+    Forms such as ``BI 50073-2021 : 2025`` may yield year ``2021`` while
+    leaving ``: 2025`` in the body. Residual edition years are metadata.
+    """
+    if year is None:
+        return body, year
+    cleaned = re.sub(
+        r"(?i)\s*[:\-]\s*(?:19|20)\d{2}\b",
+        "",
+        str(body or ""),
+    ).strip(" :.,-()[]{}")
+    if re.search(r"\d", cleaned):
+        return cleaned, year
+    return body, year
+
+
 def extract_year(value: str) -> Tuple[str, Optional[int]]:
-    value = REAFFIRMATION_RE.sub("", clean(value)).rstrip()
+    value = COMPACT_REVIEW_NOTE_RE.sub("", clean(value)).rstrip()
+    value = REAFFIRMATION_RE.sub("", value).rstrip()
     shortened, two_digit_year = _edition_from_two_digit_suffix(value)
     if two_digit_year is not None:
-        return shortened, two_digit_year
+        return _finalize_extracted_year(shortened, two_digit_year)
     # Year in the middle: "SP 55:2025 AND 11 X 17 LAMINATED PHOTO SET"
     if not re.search(r"(?:19|20)\d{2}-\d{2}-(?:19|20)\d{2}", value):
         mid_year = re.match(
@@ -1019,7 +1113,10 @@ def extract_year(value: str) -> Tuple[str, Optional[int]]:
             body = (
                 mid_year.group("body") + (mid_year.group("tail") or "")
             ).strip()
-            return body, int(mid_year.group("year"))
+            return _finalize_extracted_year(
+                body,
+                int(mid_year.group("year")),
+            )
     match = YEAR_RE.search(value)
     if not match:
         return value, None
@@ -1037,7 +1134,7 @@ def extract_year(value: str) -> Tuple[str, Optional[int]]:
             separator = value[separator_at - 1]
         if separator not in "-:":
             return value, None
-    return body, year
+    return _finalize_extracted_year(body, year)
 
 
 def _century_from_two_digit_year(year_digits: int) -> int:
@@ -1198,13 +1295,11 @@ def _prepare_display(display: str) -> str:
         "",
         display,
     ).strip()
-    # Rename history such as "(Previously CB 15000-2020)" or "(Formerly FB 1)"
-    # must not become part of the searchable identity core.
-    display = re.sub(
-        r"(?is)\s*[\(\[]\s*(?:previously|formerly)\b[^\)\]]*[\)\]]?",
-        "",
-        display,
-    ).strip()
+    display = COMPACT_REVIEW_NOTE_RE.sub("", display).strip()
+    # Strip all non-identity parentheses in one pass so catalogue notes
+    # such as "(2025)", "(VE2)", "(Previously …)", or "(IEC …)" never
+    # become part of the searchable core. Part/section parentheses stay.
+    display = _strip_metadata_parentheses(display)
     display = re.sub(
         r"(?is)^(?P<base>\d{4,})-2Luminaires\s*:\s*Part-2\s*:"
         r".*?\bFixed\s+general\s+purpose\s+luminaires\b.*$",

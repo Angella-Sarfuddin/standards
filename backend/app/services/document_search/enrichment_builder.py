@@ -1028,6 +1028,9 @@ def build_enrichment_map(
             "document_available": bool(
                 master and master.DocumentAvailability == 1
             ),
+            "subscription_available": bool(
+                master and int(getattr(master, "BSBSubscription", 0) or 0) == 1
+            ),
             "has_database_price": bool(
                 master and master.id in prices_by_master
             ),

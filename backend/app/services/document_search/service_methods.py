@@ -1143,6 +1143,27 @@ class DocumentSearchServiceMethods:
         return result_helpers.format_master_standard(standard)
 
     @staticmethod
+    def _subscription_flag_value(standard_data, standard=None):
+        """Return 1/0 for Standards-e-Pedia from enrichment or catalogue flags."""
+        data = standard_data if isinstance(standard_data, dict) else {}
+        enrichment = data.get("enrichment") or {}
+        if enrichment.get("subscription_available") is True:
+            return 1
+        if enrichment.get("subscription_available") is False:
+            return 0
+        for value in (
+            data.get("BSBSubscription"),
+            getattr(standard, "BSBSubscription", None),
+        ):
+            if value is None:
+                continue
+            try:
+                return 1 if int(value) == 1 else 0
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    @staticmethod
     def _normalize_bis_standard_designation(standard_data):
         """Present BIS catalog identifiers with the IS designation prefix."""
         for field in ("display_stdNo", "standardno"):

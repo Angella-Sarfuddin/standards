@@ -101,7 +101,8 @@ def _expand_series_export_rows(results, db):
                 "_seriesExpanded": True,
             })
 
-    # Remove duplicate results.
+    # Remove exact series-expansion clones, but keep distinct worksheet
+    # requests so the Duplicates sheet can still report repeated searches.
     deduplicated = []
     seen = set()
 
@@ -115,6 +116,11 @@ def _expand_series_export_rows(results, db):
         ).strip().casefold()
 
         standard = result.get("standard") or {}
+        source_identity = result.get("source_row_identity")
+        if isinstance(source_identity, list):
+            source_identity = tuple(source_identity)
+        elif not isinstance(source_identity, tuple):
+            source_identity = None
 
         if result.get("matched") and standard:
             resolved = (
@@ -129,6 +135,7 @@ def _expand_series_export_rows(results, db):
                 requested_sdo,
                 requested_standard,
                 str(resolved or "").casefold(),
+                source_identity,
             )
         else:
             key = (
@@ -137,6 +144,7 @@ def _expand_series_export_rows(results, db):
                 requested_standard,
                 str(result.get("status") or "").casefold(),
                 str(result.get("status_detail") or "").casefold(),
+                source_identity,
             )
 
         if key in seen:
