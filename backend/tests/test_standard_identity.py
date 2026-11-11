@@ -1516,6 +1516,10 @@ class StandardIdentityTests(unittest.TestCase):
             "NEMA",
             "NEMA BI 50004-2026 (Formerly FB 1)",
         )
+        formally = parse_identity(
+            "NEMA",
+            "NEMA BI-50006 -2024 (Formally RN1)",
+        )
         requested = parse_identity("NEMA", "BI 50052")
 
         self.assertEqual(renamed["core_number"], "BI50052")
@@ -1524,6 +1528,74 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(identity_matches(requested, renamed, check_year=False))
         self.assertEqual(formerly["core_number"], "BI50004")
         self.assertEqual(formerly["year"], 2026)
+        self.assertEqual(formally["core_number"], "BI50006")
+        self.assertEqual(formally["year"], 2024)
+
+    def test_short_legacy_alias_parentheses_are_not_identity(self):
+        aliased = parse_identity(
+            "NEMA",
+            "NEMA BI 50016-2024 (VE2)",
+        )
+        requested_hyphen = parse_identity("NEMA", "NEMA BI-50016")
+        requested_space = parse_identity("NEMA", "BI 50016")
+
+        self.assertEqual(aliased["core_number"], "BI50016")
+        self.assertEqual(aliased["year"], 2024)
+        self.assertNotIn("VE2", str(aliased["core_number"]))
+        self.assertTrue(
+            identity_matches(requested_hyphen, aliased, check_year=False)
+        )
+        self.assertTrue(
+            identity_matches(requested_space, aliased, check_year=False)
+        )
+
+    def test_metadata_parentheses_are_stripped_but_parts_are_kept(self):
+        with_year_note = parse_identity(
+            "NEMA",
+            "NEMA BI 50073-2021 (2025) "
+            "(Previously Application Guide Vibration-2021) : 2025",
+        )
+        requested = parse_identity("NEMA", "BI 50073")
+        part_kept = parse_identity("BIS", "IS 6533 (Part 2) : 1989")
+        cited = parse_identity(
+            "IS",
+            "IS 2071 : Part 1 : 2016(IEC PUB 60-1 : 2010)",
+        )
+
+        self.assertEqual(with_year_note["core_number"], "BI50073")
+        self.assertNotIn("2025", str(with_year_note["core_number"]))
+        self.assertTrue(
+            identity_matches(requested, with_year_note, check_year=False)
+        )
+        self.assertEqual(part_kept["core_number"], "6533")
+        self.assertEqual(part_kept["qualifier"], "PART:2")
+        self.assertEqual(cited["core_number"], "2071")
+        self.assertEqual(cited["qualifier"], "PART:1")
+
+    def test_compact_review_notes_are_not_identity(self):
+        from app.core.standard_identity import reaffirmation_year
+
+        reviewed = parse_identity(
+            "NEMA",
+            "NEMA BI 50090-2015 (R2020,S2025)",
+        )
+        stabilized = parse_identity(
+            "NEMA",
+            "NEMA BI 50090-2015 (S2025)",
+        )
+        requested = parse_identity("NEMA", "BI 50090")
+
+        self.assertEqual(reviewed["core_number"], "BI50090")
+        self.assertEqual(reviewed["year"], 2015)
+        self.assertIsNone(reviewed["qualifier"])
+        self.assertTrue(
+            identity_matches(requested, reviewed, check_year=False)
+        )
+        self.assertEqual(stabilized["core_number"], "BI50090")
+        self.assertEqual(
+            reaffirmation_year("NEMA BI 50090-2015 (R2020,S2025)"),
+            2025,
+        )
 
     def test_qualifier_only_identity_matches_separator_variants(self):
         self.assertTrue(
@@ -2288,6 +2360,28 @@ class StandardIdentityTests(unittest.TestCase):
                 parse_identity("API", number),
                 check_year=False,
             )
+        )
+
+    def test_parenthetical_publisher_citations_are_not_identity(self):
+        cited = parse_identity(
+            "IS",
+            "IS 2071 : Part 1 : 2016(IEC PUB 60-1 : 2010)",
+        )
+        requested = parse_identity("IS", "IS 2071 1")
+        mod_cited = parse_identity(
+            "IS",
+            "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)",
+        )
+
+        self.assertEqual(cited["core_number"], "2071")
+        self.assertEqual(cited["qualifier"], "PART:1")
+        self.assertEqual(cited["year"], 2016)
+        self.assertTrue(identity_matches(requested, cited, check_year=False))
+        self.assertEqual(mod_cited["core_number"], "12065")
+        self.assertEqual(mod_cited["year"], 2025)
+        self.assertFalse(
+            "IEC" in str(cited["core_number"])
+            or "PUB" in str(cited["core_number"])
         )
 
     def test_bis_adoption_of_any_publisher_is_priced_and_plain_is_is_not(self):

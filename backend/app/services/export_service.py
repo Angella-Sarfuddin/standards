@@ -7,13 +7,18 @@ from io import BytesIO
 import pandas as pd
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from app.services.grouping_service import GroupingService
 from app.core.api_classification_filter import filter_api_classifications
-from app.core.standard_identity import bis_names_another_standard
+from app.core.standard_identity import (
+    bis_names_another_standard,
+    canonicalize_search_request,
+    normalize_tokens,
+    parse_identity,
+)
 from app.services.document_search.enrichment_builder import (
     committee_display_codes,
 )
 from app.services.document_search.lifecycle_status import (
+    _lifecycle_status_from_evidence,
     _normalize_unavailable_status_label,
 )
 
@@ -29,15 +34,8 @@ class ExportService:
         "Currency",
         "Price",
         "TC",
-    ]
-    GROUPING_COLUMNS = [
-        "SDO",
-        "TC",
-        "Type",
-        "Standards Count",
-        "Individual Total",
-        "Group Price",
-        "Potential Saving",
+        "Catalog Status",
+        "Standards-e-Pedia",
     ]
     LATEST_YEAR_COLUMNS = [
         "SDO",
@@ -50,21 +48,33 @@ class ExportService:
         "SDO",
         "Standard",
         "Status",
+        "Catalog Status",
         "Superseded By",
+        "Standards-e-Pedia",
+    ]
+    DUPLICATE_COLUMNS = [
+        "SDO",
+        "Requested Standard",
+        "Matched Standard",
+        "Status",
+        "Catalog Status",
+        "Standard Year",
+        "Duplicate Count",
+        "Standards-e-Pedia",
     ]
 
     @staticmethod
     def export_results(response):
 
         results = response.get("results", [])
-        grouping = response.get("grouping", {})
+        # One Found row per duplicate group; extras go on the Duplicates sheet.
+        results = ExportService._unique_export_results(
+            [result for result in results or [] if result.get("matched")]
+        )
 
         quotation_rows = []
 
         for result in results:
-
-            if not result.get("matched"):
-                continue
 
             standard = result.get("standard")
 
@@ -121,6 +131,10 @@ class ExportService:
                 else None,
                 "Currency": currency,
                 "Price": price,
+                "Catalog Status": ExportService._catalog_status_label(result),
+                "Standards-e-Pedia": ExportService._standards_e_pedia_flag(
+                    result
+                ),
             }
 
             # Keep one quotation row per found request. A standard may belong
@@ -180,38 +194,6 @@ class ExportService:
         )
         quotation_df = ExportService._sort_by_sdo(quotation_df)
 
-        grouping_rows = []
-
-        if grouping.get("enabled"):
-
-            for group in grouping.get("groups", []):
-
-                grouping_rows.append({
-                    "SDO": ExportService._export_sdo(group.get("sdo")),
-                    "TC": group.get("tc"),
-                    "Type": group.get(
-                        "type"
-                    ),
-                    "Standards Count": group.get(
-                        "count"
-                    ),
-                    "Individual Total": group.get(
-                        "individual_total"
-                    ),
-                    "Group Price": group.get(
-                        "group_price"
-                    ),
-                    "Potential Saving": group.get(
-                        "potential_saving"
-                    )
-                })
-
-        grouping_df = pd.DataFrame(
-            grouping_rows,
-            columns=ExportService.GROUPING_COLUMNS,
-        )
-        grouping_df = ExportService._sort_by_sdo(grouping_df)
-
         output = BytesIO()
 
         with pd.ExcelWriter(
@@ -223,12 +205,6 @@ class ExportService:
                 writer,
                 index=False,
                 sheet_name="Quotation"
-            )
-
-            grouping_df.to_excel(
-                writer,
-                index=False,
-                sheet_name="Grouping Summary"
             )
 
         output.seek(0)
@@ -689,38 +665,29 @@ class ExportService:
 
     @staticmethod
     def export_not_found_excel(results):
-        """Build a formatted workbook containing every unmatched request."""
+        """Build a workbook with unmatched requests and found duplicates."""
+        all_results = list(results or [])
+        # One Not Found row per duplicate group; extras stay on Duplicates.
+        unique_unmatched = ExportService._unique_export_results(
+            [
+                result
+                for result in all_results
+                if not result.get("matched")
+            ]
+        )
         rows = []
-        for result in results or []:
-            if result.get("matched"):
-                continue
-
-            def clean_field(value, fallback="-"):
-                text = str(value or "").strip()
-                text = " ".join(text.split())
-                return text or fallback
-
-            requested_sdo = clean_field(result.get("requested_sdo"), "")
-            requested_standard = clean_field(
+        for result in unique_unmatched:
+            requested_sdo = ExportService._clean_export_text(
+                result.get("requested_sdo"),
+                "",
+            )
+            requested_standard = ExportService._clean_export_text(
                 result.get("requested_standard"),
             )
-            complete_standard = requested_standard
-            if requested_standard:
-                has_sdo_prefix = bool(
-                    re.match(
-                        r"(?i)^(?:ISO(?:/(?:IEC|TS|TR))?|IEC(?:/(?:TR|TS))?|"
-                        r"API|ASTM|ASME|NACE|AMPP|AWWA|ASHRAE|IEEE|ACI|JIS|UL|"
-                        r"ANSI|BSI|BS|BIS|IS|EN|DIN|CEN|CENELEC|CSA|FM|IGEM|"
-                        r"AWS|AISC|ICC|IAPMO|SII|GB|KS|SANS|NEMA|ISA|EI|DNV|"
-                        r"PD|SSPC|HI|CIGRE|EIA|ETS|NFPA|SAE|TEMA)\b",
-                        requested_standard,
-                    )
-                )
-                if not has_sdo_prefix and requested_sdo:
-                    complete_standard = f"{requested_sdo} {requested_standard}"
-                complete_standard = ExportService._strip_revision_suffix(
-                    complete_standard
-                )
+            complete_standard = ExportService._complete_requested_standard(
+                requested_sdo,
+                requested_standard,
+            )
 
             reason = (
                 result.get("not_found_reason")
@@ -746,16 +713,24 @@ class ExportService:
                         requested_sdo,
                         requested_standard,
                     ),
-                    "Standard": clean_field(complete_standard),
+                    "Standard": ExportService._clean_export_text(
+                        complete_standard
+                    ),
                     "Status": display_status,
+                    "Catalog Status": ExportService._catalog_status_label(
+                        result
+                    ),
                     "Superseded By": (
-                        clean_field(
+                        ExportService._clean_export_text(
                             result.get("superseded_by")
                             or result.get("replacement_standard")
                         )
                         if result.get("superseded_by")
                         or result.get("replacement_standard")
                         else None
+                    ),
+                    "Standards-e-Pedia": ExportService._standards_e_pedia_flag(
+                        result
                     ),
                 }
             )
@@ -765,6 +740,10 @@ class ExportService:
             columns=ExportService.NOT_FOUND_COLUMNS,
         )
         dataframe = ExportService._sort_by_sdo(dataframe)
+        duplicates_df = pd.DataFrame(
+            ExportService._duplicate_export_rows(all_results),
+            columns=ExportService.DUPLICATE_COLUMNS,
+        )
         output = BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             dataframe.to_excel(
@@ -772,54 +751,354 @@ class ExportService:
                 index=False,
                 sheet_name="Not Found",
             )
+            duplicates_df.to_excel(
+                writer,
+                index=False,
+                sheet_name="Duplicates",
+            )
         output.seek(0)
         ExportService._format_workbook(output)
         output.seek(0)
         return output
 
     @staticmethod
+    def _clean_export_text(value, fallback="-"):
+        text = str(value or "").strip()
+        text = " ".join(text.split())
+        return text or fallback
+
+    @staticmethod
+    def _complete_requested_standard(requested_sdo, requested_standard):
+        complete_standard = requested_standard
+        if requested_standard:
+            has_sdo_prefix = bool(
+                re.match(
+                    r"(?i)^(?:ISO(?:/(?:IEC|TS|TR))?|IEC(?:/(?:TR|TS))?|"
+                    r"API|ASTM|ASME|NACE|AMPP|AWWA|ASHRAE|IEEE|ACI|JIS|UL|"
+                    r"ANSI|BSI|BS|BIS|IS|EN|DIN|CEN|CENELEC|CSA|FM|IGEM|"
+                    r"AWS|AISC|ICC|IAPMO|SII|GB|KS|SANS|NEMA|ISA|EI|DNV|"
+                    r"PD|SSPC|HI|CIGRE|EIA|ETS|NFPA|SAE|TEMA)\b",
+                    requested_standard,
+                )
+            )
+            if not has_sdo_prefix and requested_sdo:
+                complete_standard = f"{requested_sdo} {requested_standard}"
+            complete_standard = ExportService._strip_revision_suffix(
+                complete_standard
+            )
+        return complete_standard
+
+    @staticmethod
+    def _matched_catalogue_key(result):
+        """Group found rows that resolved to the same catalogue standard."""
+        if not result or not result.get("matched"):
+            return None
+        standard = result.get("standard") or {}
+        if not isinstance(standard, dict) or not standard:
+            return None
+        display = (
+            standard.get("display_stdNo")
+            or standard.get("standardno")
+            or ""
+        )
+        standard_id = standard.get("Standard_id") or standard.get("id")
+        year = standard.get("standardyear")
+        if year is None:
+            year = (standard.get("enrichment") or {}).get("year")
+        sdo = (
+            standard.get("sdo_id")
+            or normalize_tokens(result.get("requested_sdo") or "")
+        )
+        if not standard_id and not display:
+            return None
+        return (
+            "found",
+            sdo,
+            normalize_tokens(str(standard_id or "")),
+            normalize_tokens(str(display)),
+            year,
+        )
+
+    @staticmethod
+    def _requested_identity_key(result):
+        """Group any rows that ask for the same standard identity."""
+        if not result:
+            return None
+        requested_sdo = str(result.get("requested_sdo") or "").strip()
+        requested_standard = str(result.get("requested_standard") or "").strip()
+        if not requested_sdo and not requested_standard:
+            return None
+        sdo_name, cleaned, _ = canonicalize_search_request(
+            requested_sdo,
+            requested_standard,
+        )
+        identity = parse_identity(sdo_name, cleaned)
+        core = (
+            identity.get("core_number")
+            or identity.get("core")
+            or normalize_tokens(requested_standard)
+        )
+        if not core:
+            return None
+        return (
+            "request",
+            normalize_tokens(
+                sdo_name or requested_sdo or identity.get("sdo_name") or ""
+            ),
+            normalize_tokens(str(core)),
+            normalize_tokens(str(identity.get("qualifier") or "")),
+            identity.get("year"),
+        )
+
+    @staticmethod
+    def _duplicate_keys(result):
+        """Request identity for all rows, plus catalogue identity when found."""
+        keys = []
+        requested = ExportService._requested_identity_key(result)
+        if requested is not None:
+            keys.append(requested)
+        matched = ExportService._matched_catalogue_key(result)
+        if matched is not None:
+            keys.append(matched)
+        return keys
+
+    @staticmethod
+    def _result_group_indexes(results):
+        """Union results that share any duplicate identity key."""
+        results = list(results or [])
+        parent = list(range(len(results)))
+
+        def find(index):
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left, right):
+            root_left = find(left)
+            root_right = find(right)
+            if root_left != root_right:
+                parent[root_right] = root_left
+
+        key_owners = {}
+        for index, result in enumerate(results):
+            keys = ExportService._duplicate_keys(result)
+            if not keys:
+                continue
+            owners = []
+            for key in keys:
+                if key in key_owners:
+                    union(index, key_owners[key])
+                else:
+                    key_owners[key] = index
+                owners.append(key_owners[key])
+            for owner in owners[1:]:
+                union(owners[0], owner)
+            union(index, owners[0])
+
+        groups = {}
+        for index in range(len(results)):
+            groups.setdefault(find(index), []).append(index)
+        return groups
+
+    @staticmethod
+    def _unique_export_results(results):
+        """Keep the first row from each duplicate identity group."""
+        results = list(results or [])
+        if not results:
+            return []
+        groups = ExportService._result_group_indexes(results)
+        keep_indexes = sorted(min(members) for members in groups.values())
+        return [results[index] for index in keep_indexes]
+
+    @staticmethod
+    def _duplicate_status_label(result):
+        if result.get("matched"):
+            return str(result.get("status") or "AVAILABLE").strip() or "AVAILABLE"
+        reason = (
+            result.get("not_found_reason")
+            or ExportService._not_found_reason_fallback(result)
+        )
+        lifecycle_status = ExportService._not_found_lifecycle_status(
+            result,
+            reason,
+        )
+        if lifecycle_status:
+            return lifecycle_status
+        normalized_reason = str(reason or "").strip().casefold()
+        if normalized_reason == "withdrawn":
+            return "WITHDRAWN"
+        if normalized_reason == "historical":
+            return "HISTORICAL"
+        if normalized_reason == "sdo not found":
+            return "SDO NOT FOUND"
+        return str(result.get("status") or "NOT FOUND").strip() or "NOT FOUND"
+
+    @staticmethod
+    def _duplicate_export_rows(results):
+        """Return overall duplicate requests for found and not-found rows."""
+        results = list(results or [])
+        groups = ExportService._result_group_indexes(results)
+
+        duplicate_indexes = {}
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            count = len(members)
+            for index in members:
+                duplicate_indexes[index] = max(
+                    duplicate_indexes.get(index, 0),
+                    count,
+                )
+
+        rows = []
+        for index in sorted(duplicate_indexes):
+            result = results[index]
+            standard = result.get("standard") or {}
+            requested_sdo = ExportService._clean_export_text(
+                result.get("requested_sdo"),
+                "",
+            )
+            requested_standard = ExportService._clean_export_text(
+                result.get("requested_standard"),
+            )
+            matched_standard = (
+                standard.get("display_stdNo")
+                or standard.get("standardno")
+                or ""
+            )
+            year = None
+            if isinstance(standard, dict) and standard:
+                year = standard.get("standardyear")
+                if year is None:
+                    year = (standard.get("enrichment") or {}).get("year")
+            if year is None:
+                identity = parse_identity(
+                    requested_sdo,
+                    requested_standard,
+                )
+                year = identity.get("year")
+            rows.append(
+                {
+                    "SDO": ExportService._export_sdo(
+                        requested_sdo,
+                        requested_standard,
+                    ),
+                    "Requested Standard": ExportService._clean_export_text(
+                        ExportService._complete_requested_standard(
+                            requested_sdo,
+                            requested_standard,
+                        )
+                    ),
+                    "Matched Standard": (
+                        ExportService._clean_export_text(matched_standard)
+                        if matched_standard
+                        else None
+                    ),
+                    "Status": ExportService._duplicate_status_label(result),
+                    "Catalog Status": ExportService._catalog_status_label(
+                        result
+                    ),
+                    "Standard Year": year,
+                    "Duplicate Count": duplicate_indexes[index],
+                    "Standards-e-Pedia": (
+                        ExportService._standards_e_pedia_flag(result)
+                    ),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _catalog_status_label(result):
+        """Return parent catalogue status (Active/Withdrawn/Historical/...)."""
+        if not result:
+            return None
+        for value in (
+            result.get("parent_status"),
+            (result.get("standard") or {}).get("parent_status")
+            if isinstance(result.get("standard"), dict)
+            else None,
+        ):
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _standards_e_pedia_flag(result):
+        """Return Available/Not Available for Standards-e-Pedia subscription.
+
+        Prefer master enrichment, then the matched catalogue field, then the
+        result-level flag preserved for unmatched catalogue hits. Missing
+        evidence is Not Available.
+        """
+        if result is None:
+            return "Not Available"
+
+        standard = result.get("standard") or {}
+        enrichment = (
+            standard.get("enrichment")
+            if isinstance(standard, dict)
+            else None
+        ) or {}
+        if enrichment.get("subscription_available") is True:
+            return "Available"
+        if enrichment.get("subscription_available") is False:
+            return "Not Available"
+
+        if isinstance(standard, dict) and standard.get("BSBSubscription") is not None:
+            try:
+                return (
+                    "Available"
+                    if int(standard.get("BSBSubscription")) == 1
+                    else "Not Available"
+                )
+            except (TypeError, ValueError):
+                pass
+
+        direct = result.get("bsb_subscription")
+        if direct is not None:
+            try:
+                return "Available" if int(direct) == 1 else "Not Available"
+            except (TypeError, ValueError):
+                pass
+        return "Not Available"
+
+    @staticmethod
     def _not_found_lifecycle_status(result, reason=None):
         """Prefer catalogue lifecycle labels over a flat NOT FOUND export."""
-        for value in (
-            result.get("status"),
-            reason,
-            result.get("not_found_reason"),
+        direct = _normalize_unavailable_status_label(result.get("status"))
+        if direct in {"WITHDRAWN", "HISTORICAL"}:
+            return direct
+        reason_label = _normalize_unavailable_status_label(
+            reason or result.get("not_found_reason")
+        )
+        if reason_label in {"WITHDRAWN", "HISTORICAL"}:
+            return reason_label
+        recovered = _lifecycle_status_from_evidence(
             result.get("status_detail"),
-        ):
-            label = _normalize_unavailable_status_label(value)
-            if label in {"WITHDRAWN", "HISTORICAL"}:
-                return label
+            result.get("superseded_by"),
+            result.get("replacement_standard"),
+        )
+        if recovered in {"WITHDRAWN", "HISTORICAL"}:
+            return recovered
         return None
 
     @staticmethod
     def _not_found_reason_fallback(result):
         """Provide useful reason labels for unmatched export payloads."""
-        evidence = " ".join(
-            str(value or "")
-            for value in (
-                result.get("status"),
-                result.get("status_detail"),
-                result.get("superseded_by"),
-                result.get("replacement_standard"),
-            )
-        ).casefold()
         lifecycle = ExportService._not_found_lifecycle_status(result)
         if lifecycle == "WITHDRAWN":
             return "Withdrawn"
         if lifecycle == "HISTORICAL":
             return "Historical"
-        if re.search(r"\bwithdrawn\b", evidence):
-            return "Withdrawn"
-        if re.search(
-            r"\b(?:historical|historic|superseded|obsolete|archived)\b",
-            evidence,
-        ):
-            return "Historical"
-        if re.search(
-            r"\b(?:inactive|discontinued|not available)\b",
-            evidence,
-        ):
-            return "Unavailable"
+        evidence = " ".join(
+            str(value or "")
+            for value in (
+                result.get("status"),
+                result.get("status_detail"),
+            )
+        ).casefold()
         if "sdo not found" in evidence:
             return "SDO not found"
         return "Not found in catalog"
@@ -827,11 +1106,9 @@ class ExportService:
     @staticmethod
     def export_found_and_not_found_zip(quotation_results, all_results):
         """Bundle found and unmatched standards as Excel workbooks."""
-        grouping = GroupingService.group_results(quotation_results or [])
         workbook = ExportService.export_results(
             {
                 "results": quotation_results or [],
-                "grouping": grouping,
             }
         )
         not_found_workbook = ExportService.export_not_found_excel(

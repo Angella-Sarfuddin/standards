@@ -10,3 +10,4 @@ class StandardStatus(Base):
     status = Column(String(255))
     std_show = Column(Integer)
     cart_show = Column(Integer)
+    parent_status_id = Column(Integer)

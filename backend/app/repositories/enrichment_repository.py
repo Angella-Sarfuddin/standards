@@ -961,7 +961,9 @@ class EnrichmentRepository:
         return list(aliases_by_id.values())
 
     def get_standard_status_map(self, status_ids):
-        """Load display and cart visibility for detailed standard statuses."""
+        """Load display, cart visibility, and parent status labels."""
+        from app.models.standard_status_code import StandardStatusCode
+
         status_ids = {
             int(status_id)
             for status_id in status_ids or []
@@ -977,13 +979,22 @@ class EnrichmentRepository:
                 StandardStatus.status,
                 StandardStatus.std_show,
                 StandardStatus.cart_show,
-            ).filter(StandardStatus.id.in_(status_ids)),
+                StandardStatus.parent_status_id,
+                StandardStatusCode.title.label("parent_title"),
+            )
+            .outerjoin(
+                StandardStatusCode,
+                StandardStatusCode.Id == StandardStatus.parent_status_id,
+            )
+            .filter(StandardStatus.id.in_(status_ids)),
         )
         return {
             row.id: {
                 "name": row.status,
                 "std_show": row.std_show,
                 "cart_show": row.cart_show,
+                "parent_status_id": row.parent_status_id,
+                "parent_name": row.parent_title,
             }
             for row in rows
         }
