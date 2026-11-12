@@ -2858,6 +2858,28 @@ class StandardIdentityTests(unittest.TestCase):
             "D%1250",
         )
 
+    def test_letter_digit_variants_include_hyphen_forms(self):
+        from app.core.standard_identity import (
+            identity_indexable_like_patterns,
+            parse_identity,
+        )
+
+        spaced = parse_identity("ASME", "PCC 2")
+        self.assertIn("PCC-2", spaced["variants"])
+        self.assertIn("ASME PCC-2", spaced["variants"])
+        self.assertIn("PCC2", spaced["variants"])
+
+        hyphen = parse_identity("ASME", "PCC-2")
+        self.assertIn("PCC 2", hyphen["variants"])
+        self.assertIn("PCC2", hyphen["variants"])
+        self.assertIn("ASME PCC 2", hyphen["variants"])
+
+        patterns = identity_indexable_like_patterns("ASME", "PCC2")
+        self.assertIn("ASME PCC-2%", patterns)
+        self.assertIn("PCC-2%", patterns)
+        self.assertIn("ASME PCC 2%", patterns)
+        self.assertIn("ASME PCC2%", patterns)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -732,6 +732,11 @@ class DuplicateExportSheetTests(unittest.TestCase):
                 "IS 5001 01-Feb 1973",
             },
         )
+        groups = {
+            row[duplicate_headers.index("Group")]
+            for row in duplicate_rows
+        }
+        self.assertEqual(groups, {1})
         for row in duplicate_rows:
             self.assertEqual(
                 row[duplicate_headers.index("Matched Standard")],
@@ -836,17 +841,31 @@ class DuplicateExportSheetTests(unittest.TestCase):
         )
         self.assertEqual(len(duplicate_rows), 6)
         by_request = {}
+        by_group = {}
         for row in duplicate_rows:
             requested = row[headers.index("Requested Standard")]
+            group = row[headers.index("Group")]
             by_request.setdefault(requested, []).append(
                 row[headers.index("Status")]
             )
+            by_group.setdefault(group, []).append(requested)
             self.assertIsNone(row[headers.index("Matched Standard")])
             self.assertEqual(row[headers.index("Duplicate Count")], 2)
         self.assertEqual(len(by_request["IEEE C57.12.26"]), 2)
         self.assertEqual(len(by_request["IEEE C2 ERTA"]), 2)
         self.assertEqual(len(by_request["ASME B18.2.3.5M : 1979"]), 2)
         self.assertNotIn("NEMA BI 50093", by_request)
+        self.assertEqual(len(by_group), 3)
+        # Related duplicates must sit in contiguous Group blocks.
+        group_sequence = [
+            row[headers.index("Group")] for row in duplicate_rows
+        ]
+        self.assertEqual(
+            group_sequence,
+            sorted(group_sequence, key=lambda value: (value,)),
+        )
+        for group, requested_values in by_group.items():
+            self.assertEqual(len(requested_values), 2)
 
     def test_found_list_keeps_one_row_per_duplicate_group(self):
         matched = "IS 5001 : 2018(IEC 60191-1 : 2007)"
@@ -924,6 +943,77 @@ class DuplicateExportSheetTests(unittest.TestCase):
         self.assertEqual(len(dup_rows), 2)
         self.assertEqual(dup_rows[0]["Requested Standard"], "IEEE C2 ERTA")
         self.assertEqual(dup_rows[0]["Duplicate Count"], 2)
+        self.assertEqual(dup_rows[0]["Group"], 1)
+        self.assertEqual(dup_rows[1]["Group"], 1)
+
+    def test_duplicate_rows_are_grouped_together_by_identity(self):
+        results = [
+            self._found(
+                "API 5L",
+                "API SPEC 5L : 2026",
+                year=2026,
+                sdo="API",
+                standard_id="API-5L",
+            ),
+            self._found(
+                "ASME B16.11",
+                "ASME B16.11 : 2021",
+                year=2021,
+                sdo="ASME",
+                standard_id="ASME-B16.11",
+            ),
+            self._found(
+                "API SPEC 5L",
+                "API SPEC 5L : 2026",
+                year=2026,
+                sdo="API",
+                standard_id="API-5L",
+            ),
+            self._found(
+                "ASME B 16.11",
+                "ASME B16.11 : 2021",
+                year=2021,
+                sdo="ASME",
+                standard_id="ASME-B16.11",
+            ),
+        ]
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(len(dup_rows), 4)
+        self.assertEqual(
+            [row["Group"] for row in dup_rows],
+            [1, 1, 2, 2],
+        )
+        group_one = [
+            row["Requested Standard"]
+            for row in dup_rows
+            if row["Group"] == 1
+        ]
+        group_two = [
+            row["Requested Standard"]
+            for row in dup_rows
+            if row["Group"] == 2
+        ]
+        self.assertEqual(set(group_one), {"API 5L", "API SPEC 5L"})
+        self.assertEqual(set(group_two), {"ASME B16.11", "ASME B 16.11"})
+
+    def test_series_expansion_is_not_listed_as_duplicates(self):
+        results = [
+            {
+                **self._found(
+                    "IEC 62305:2025 SER (EN-FR)",
+                    f"IEC 62305-{part}:2024 (EN-FR)",
+                    year=2024,
+                    sdo="IEC",
+                    standard_id=f"IEC-62305-{part}",
+                ),
+                "_seriesExpanded": True,
+            }
+            for part in (1, 2, 3, 4)
+        ]
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(dup_rows, [])
+        unique = ExportService._unique_export_results(results)
+        self.assertEqual(len(unique), 4)
 
     def test_unique_found_standards_do_not_fill_duplicates_sheet(self):
         results = [

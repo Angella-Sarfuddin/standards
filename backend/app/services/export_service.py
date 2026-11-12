@@ -53,6 +53,7 @@ class ExportService:
         "Standards-e-Pedia",
     ]
     DUPLICATE_COLUMNS = [
+        "Group",
         "SDO",
         "Requested Standard",
         "Matched Standard",
@@ -902,14 +903,59 @@ class ExportService:
         return groups
 
     @staticmethod
+    def _request_looks_like_series(result):
+        """True when the request is a series root (SER/SERIES), not one edition."""
+        if not result:
+            return False
+        requested_sdo = str(result.get("requested_sdo") or "").strip()
+        requested_standard = str(result.get("requested_standard") or "").strip()
+        if not requested_sdo and not requested_standard:
+            return False
+        identity = parse_identity(requested_sdo, requested_standard)
+        return identity.get("qualifier") == "SERIES"
+
+    @staticmethod
+    def _is_series_expansion_group(results, members):
+        """One series request expanded into multiple distinct matched parts."""
+        results = list(results or [])
+        members = list(members or [])
+        if len(members) < 2:
+            return False
+        request_keys = {
+            ExportService._requested_identity_key(results[index])
+            for index in members
+        }
+        matched_keys = {
+            ExportService._matched_catalogue_key(results[index])
+            for index in members
+        }
+        if len(request_keys) != 1 or None in request_keys:
+            return False
+        if None in matched_keys or len(matched_keys) < 2:
+            return False
+        return all(
+            ExportService._request_looks_like_series(results[index])
+            for index in members
+        )
+
+    @staticmethod
     def _unique_export_results(results):
-        """Keep the first row from each duplicate identity group."""
+        """Keep the first row from each duplicate identity group.
+
+        Series expansions keep every matched part: one SER request is not a
+        duplicate set of the same standard.
+        """
         results = list(results or [])
         if not results:
             return []
         groups = ExportService._result_group_indexes(results)
-        keep_indexes = sorted(min(members) for members in groups.values())
-        return [results[index] for index in keep_indexes]
+        keep_indexes = []
+        for members in groups.values():
+            if ExportService._is_series_expansion_group(results, members):
+                keep_indexes.extend(members)
+            else:
+                keep_indexes.append(min(members))
+        return [results[index] for index in sorted(keep_indexes)]
 
     @staticmethod
     def _duplicate_status_label(result):
@@ -935,77 +981,152 @@ class ExportService:
         return str(result.get("status") or "NOT FOUND").strip() or "NOT FOUND"
 
     @staticmethod
-    def _duplicate_export_rows(results):
-        """Return overall duplicate requests for found and not-found rows."""
-        results = list(results or [])
-        groups = ExportService._result_group_indexes(results)
-
-        duplicate_indexes = {}
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            count = len(members)
-            for index in members:
-                duplicate_indexes[index] = max(
-                    duplicate_indexes.get(index, 0),
-                    count,
-                )
-
-        rows = []
-        for index in sorted(duplicate_indexes):
-            result = results[index]
-            standard = result.get("standard") or {}
-            requested_sdo = ExportService._clean_export_text(
-                result.get("requested_sdo"),
-                "",
-            )
-            requested_standard = ExportService._clean_export_text(
-                result.get("requested_standard"),
-            )
-            matched_standard = (
+    def _duplicate_group_sort_key(results, members):
+        """Order duplicate groups for easy visual scanning."""
+        first = results[members[0]]
+        requested_sdo = ExportService._clean_export_text(
+            first.get("requested_sdo"),
+            "",
+        )
+        requested_standard = ExportService._clean_export_text(
+            first.get("requested_standard"),
+        )
+        sdo = ExportService._export_sdo(
+            requested_sdo,
+            requested_standard,
+        ).casefold()
+        matched = ""
+        for index in members:
+            standard = results[index].get("standard") or {}
+            display = (
                 standard.get("display_stdNo")
                 or standard.get("standardno")
                 or ""
             )
-            year = None
-            if isinstance(standard, dict) and standard:
-                year = standard.get("standardyear")
-                if year is None:
-                    year = (standard.get("enrichment") or {}).get("year")
-            if year is None:
-                identity = parse_identity(
-                    requested_sdo,
-                    requested_standard,
+            if display:
+                matched = str(display).casefold()
+                break
+        request_key = ExportService._requested_identity_key(first) or ()
+        return (
+            sdo,
+            matched,
+            request_key,
+            str(requested_standard).casefold(),
+            members[0],
+        )
+
+    @staticmethod
+    def _duplicate_member_sort_key(result):
+        requested_sdo = ExportService._clean_export_text(
+            result.get("requested_sdo"),
+            "",
+        )
+        requested_standard = ExportService._clean_export_text(
+            result.get("requested_standard"),
+        )
+        complete = ExportService._complete_requested_standard(
+            requested_sdo,
+            requested_standard,
+        )
+        matched = ""
+        standard = result.get("standard") or {}
+        if isinstance(standard, dict):
+            matched = str(
+                standard.get("display_stdNo")
+                or standard.get("standardno")
+                or ""
+            )
+        return (
+            str(complete).casefold(),
+            matched.casefold(),
+            str(result.get("status") or "").casefold(),
+        )
+
+    @staticmethod
+    def _duplicate_export_rows(results):
+        """Return duplicate asks grouped so related rows sit together."""
+        results = list(results or [])
+        groups = ExportService._result_group_indexes(results)
+
+        duplicate_groups = []
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            if ExportService._is_series_expansion_group(results, members):
+                continue
+            duplicate_groups.append(list(members))
+
+        duplicate_groups.sort(
+            key=lambda members: ExportService._duplicate_group_sort_key(
+                results,
+                members,
+            )
+        )
+
+        rows = []
+        for group_number, members in enumerate(duplicate_groups, start=1):
+            ordered_members = sorted(
+                members,
+                key=lambda index: ExportService._duplicate_member_sort_key(
+                    results[index]
+                ),
+            )
+            count = len(ordered_members)
+            for index in ordered_members:
+                result = results[index]
+                standard = result.get("standard") or {}
+                requested_sdo = ExportService._clean_export_text(
+                    result.get("requested_sdo"),
+                    "",
                 )
-                year = identity.get("year")
-            rows.append(
-                {
-                    "SDO": ExportService._export_sdo(
+                requested_standard = ExportService._clean_export_text(
+                    result.get("requested_standard"),
+                )
+                matched_standard = (
+                    standard.get("display_stdNo")
+                    or standard.get("standardno")
+                    or ""
+                )
+                year = None
+                if isinstance(standard, dict) and standard:
+                    year = standard.get("standardyear")
+                    if year is None:
+                        year = (standard.get("enrichment") or {}).get("year")
+                if year is None:
+                    identity = parse_identity(
                         requested_sdo,
                         requested_standard,
-                    ),
-                    "Requested Standard": ExportService._clean_export_text(
-                        ExportService._complete_requested_standard(
+                    )
+                    year = identity.get("year")
+                rows.append(
+                    {
+                        "Group": group_number,
+                        "SDO": ExportService._export_sdo(
                             requested_sdo,
                             requested_standard,
-                        )
-                    ),
-                    "Matched Standard": (
-                        ExportService._clean_export_text(matched_standard)
-                        if matched_standard
-                        else None
-                    ),
-                    "Status": ExportService._duplicate_status_label(result),
-                    "Catalog Status": ExportService._catalog_status_label(
-                        result
-                    ),
-                    "Standard Year": year,
-                    "Duplicate Count": duplicate_indexes[index],
-                    "Standards-e-Pedia": (
-                        ExportService._standards_e_pedia_flag(result)
-                    ),
-                }
-            )
+                        ),
+                        "Requested Standard": ExportService._clean_export_text(
+                            ExportService._complete_requested_standard(
+                                requested_sdo,
+                                requested_standard,
+                            )
+                        ),
+                        "Matched Standard": (
+                            ExportService._clean_export_text(matched_standard)
+                            if matched_standard
+                            else None
+                        ),
+                        "Status": ExportService._duplicate_status_label(result),
+                        "Catalog Status": ExportService._catalog_status_label(
+                            result
+                        ),
+                        "Standard Year": year,
+                        "Duplicate Count": count,
+                        "Standards-e-Pedia": (
+                            ExportService._standards_e_pedia_flag(result)
+                        ),
+                    }
+                )
         return rows
 
     @staticmethod

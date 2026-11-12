@@ -489,7 +489,11 @@ def identity_core_sql_pattern(value: str) -> str:
 
 
 def _spacing_variants(value: str) -> List[str]:
-    """Generate compact/spaced letter-digit forms of an identifier body."""
+    """Generate compact/spaced/hyphenated letter-digit forms of an identifier body.
+
+    Catalogue spellings such as ``ASME PCC-2`` must be reachable from requests
+    written as ``PCC 2`` or ``PCC2``, and the reverse.
+    """
     value = normalize_tokens(value)
     if not value:
         return []
@@ -497,7 +501,23 @@ def _spacing_variants(value: str) -> List[str]:
     variants = [value]
     variants.append(re.sub(r"([A-Z])(\d)", r"\1 \2", value))
     variants.append(re.sub(r"([A-Z])\s+(\d)", r"\1\2", value))
+    variants.append(re.sub(r"([A-Z])(\d)", r"\1-\2", value))
+    variants.append(re.sub(r"([A-Z])\s+(\d)", r"\1-\2", value))
+    variants.append(re.sub(r"([A-Z])-(\d)", r"\1 \2", value))
+    variants.append(re.sub(r"([A-Z])-(\d)", r"\1\2", value))
     return list(dict.fromkeys(item for item in variants if item))
+
+
+def _letter_digit_separator_forms(compact: str) -> List[str]:
+    """Hyphen and space spellings of a compact letter-digit core (``PCC2``)."""
+    compact = normalize_identity_core(compact)
+    if not compact or not re.search(r"[A-Z]\d", compact):
+        return []
+    forms = [
+        re.sub(r"([A-Z])(\d)", r"\1-\2", compact),
+        re.sub(r"([A-Z])(\d)", r"\1 \2", compact),
+    ]
+    return [form for form in dict.fromkeys(forms) if form and form != compact]
 
 
 def identity_index_cores(sdo_name: str, core: str, raw: str = "") -> List[str]:
@@ -786,6 +806,13 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
             f"{prefix} {compact}%",
             f"{prefix}{compact}%",
         ])
+        for sep_form in _letter_digit_separator_forms(compact):
+            patterns.extend([
+                f"{prefix} {sep_form}%",
+                f"{prefix}{sep_form}%",
+            ])
+            if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
+                patterns.append(f"{sep_form}%")
         if api_spellings:
             patterns.extend(
                 f"{spelling} {core_form}%"
@@ -796,6 +823,9 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         compact_prefix = prefix.replace(" ", "")
         if glued and glued not in {prefix, compact_prefix}:
             patterns.append(f"{glued}{compact}%")
+            for sep_form in _letter_digit_separator_forms(compact):
+                if " " not in sep_form:
+                    patterns.append(f"{glued}{sep_form}%")
         if len(compact) >= _MIN_UNPREFIXED_CORE_LEN:
             patterns.append(f"{compact}%")
     else:
