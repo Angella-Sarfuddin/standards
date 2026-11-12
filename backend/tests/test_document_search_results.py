@@ -612,6 +612,44 @@ class StandardsEPediaExportTests(unittest.TestCase):
         by_catalog = {row[1]: row[status_index] for row in rows}
         self.assertEqual(by_catalog["ASME B18.2.3.5M : 1979"], "Withdrawn")
 
+    def test_older_version_available_exports_dedicated_status(self):
+        results = [
+            {
+                "requested_sdo": "API",
+                "requested_standard": "RP 555:2026",
+                "matched": False,
+                "status": "OLDER VERSION AVAILABLE",
+                "status_detail": (
+                    "Requested year 2026 is not in the catalogue; "
+                    "available in older version 2013."
+                ),
+                "not_found_reason": "Older version available",
+                "bsb_subscription": 1,
+                "parent_status": "Active",
+                "standard": None,
+            }
+        ]
+        workbook = load_workbook(
+            BytesIO(ExportService.export_not_found_excel(results).getvalue()),
+            read_only=True,
+        )
+        try:
+            headers = [
+                cell.value
+                for cell in next(workbook["Not Found"].iter_rows(max_row=1))
+            ]
+            rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0][headers.index("Status")],
+            "OLDER VERSION AVAILABLE",
+        )
+
     def test_subscription_flag_helper_prefers_enrichment_then_fields(self):
         self.assertEqual(
             ExportService._standards_e_pedia_flag({"bsb_subscription": 1}),

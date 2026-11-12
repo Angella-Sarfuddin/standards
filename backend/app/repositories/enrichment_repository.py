@@ -431,7 +431,7 @@ class EnrichmentRepository:
 
             if containment:
                 bucket["containment"][key] = containment
-            elif bound:
+            if bound:
                 bucket["bound"].setdefault(key, set()).update(bound)
 
         if not grouped:

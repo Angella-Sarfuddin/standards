@@ -695,11 +695,16 @@ class ExportService:
                 or ExportService._not_found_reason_fallback(result)
             )
             normalized_reason = str(reason or "").strip().casefold()
+            raw_status = str(result.get("status") or "").strip().upper()
             lifecycle_status = ExportService._not_found_lifecycle_status(
                 result,
                 reason,
             )
-            if lifecycle_status:
+            if raw_status == "OLDER VERSION AVAILABLE" or normalized_reason == (
+                "older version available"
+            ):
+                display_status = "OLDER VERSION AVAILABLE"
+            elif lifecycle_status:
                 display_status = lifecycle_status
             elif normalized_reason == "withdrawn":
                 display_status = "WITHDRAWN"
@@ -961,6 +966,9 @@ class ExportService:
     def _duplicate_status_label(result):
         if result.get("matched"):
             return str(result.get("status") or "AVAILABLE").strip() or "AVAILABLE"
+        raw_status = str(result.get("status") or "").strip().upper()
+        if raw_status == "OLDER VERSION AVAILABLE":
+            return "OLDER VERSION AVAILABLE"
         reason = (
             result.get("not_found_reason")
             or ExportService._not_found_reason_fallback(result)
@@ -972,6 +980,8 @@ class ExportService:
         if lifecycle_status:
             return lifecycle_status
         normalized_reason = str(reason or "").strip().casefold()
+        if normalized_reason == "older version available":
+            return "OLDER VERSION AVAILABLE"
         if normalized_reason == "withdrawn":
             return "WITHDRAWN"
         if normalized_reason == "historical":
@@ -1220,6 +1230,12 @@ class ExportService:
                 result.get("status_detail"),
             )
         ).casefold()
+        if (
+            "older version available" in evidence
+            or "available in older version" in evidence
+            or "no database edition is available for requested year" in evidence
+        ):
+            return "Older version available"
         if "sdo not found" in evidence:
             return "SDO not found"
         return "Not found in catalog"

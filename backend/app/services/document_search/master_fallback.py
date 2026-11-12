@@ -7,6 +7,7 @@ from app.services.document_search.repository_lookup import variant_tokens
 from app.services.document_search.selection_context import use_candidate_status_map
 
 from app.core.standard_identity import (
+    identity_index_cores,
     identity_lookup_core_tokens,
     identity_pattern_prefix,
     nace_publication_number,
@@ -219,11 +220,12 @@ def find_master_matches(
         ):
             continue
 
+        # Keep slash duals intact for metric/non-metric alternative discovery.
         core = (
             row["identity"].get("core_number_pattern")
             or row["identity"].get("core_number")
             or ""
-        ).split("/", 1)[0]
+        )
 
         if not core:
             continue
@@ -401,34 +403,43 @@ def find_master_matches(
 
         if core:
 
-            normalized_core = normalize_identity_core(
-                core
-            )
             request_sdo_name = normalize_tokens(
                 row.get("search_sdo_name") or row["sdo_name"]
             )
+            lookup_cores = identity_index_cores(
+                row.get("search_sdo_name") or row["sdo_name"],
+                core,
+                row["identity"].get("core_number_pattern") or "",
+            ) or [normalize_identity_core(core)]
 
+            seen_master_ids = set()
             for search_sdo_id in search_sdo_ids:
-                possible_masters = (
-                    master_identity_index.get(
-                        (
-                            search_sdo_id,
-                            request_sdo_name,
-                            normalized_core,
-                        ),
-                        {},
-                    ).values()
-                )
+                for lookup_core in lookup_cores:
+                    possible_masters = (
+                        master_identity_index.get(
+                            (
+                                search_sdo_id,
+                                request_sdo_name,
+                                lookup_core,
+                            ),
+                            {},
+                        ).values()
+                    )
 
-                for master in possible_masters:
+                    for master in possible_masters:
+                        master_id = getattr(master, "id", None)
+                        if master_id in seen_master_ids:
+                            continue
 
-                    if (
-                        master_candidate_matches_identity(master, row)
-                        or candidate_is_part_of_root(master, row)
-                    ):
-                        candidates.append(
-                            master
-                        )
+                        if (
+                            master_candidate_matches_identity(master, row)
+                            or candidate_is_part_of_root(master, row)
+                        ):
+                            if master_id is not None:
+                                seen_master_ids.add(master_id)
+                            candidates.append(
+                                master
+                            )
 
         nace_number = nace_publication_number(
             row.get("search_sdo_name") or row.get("sdo_name") or "",

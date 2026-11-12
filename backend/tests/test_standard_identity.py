@@ -14,6 +14,7 @@ from app.core.standard_identity import (
     identity_core_appears,
     identity_core_sql_pattern,
     identity_index_cores,
+    identity_indexable_like_patterns,
     identity_lookup_core_tokens,
     identity_matches,
     identity_unprefixed_like_patterns,
@@ -143,7 +144,6 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
         from app.core.standard_identity import (
-            identity_indexable_like_patterns,
             like_pattern_is_prefix_indexable,
         )
 
@@ -152,6 +152,27 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(
             all(like_pattern_is_prefix_indexable(pattern) for pattern in patterns)
         )
+
+    def test_iec_bare_number_discovers_tr_ts_pas_guide_variants(self):
+        requested = parse_identity("IEC", "60909-1")
+        tr = parse_identity("IEC", "IEC TR 60909-1:2002")
+        ts = parse_identity("IEC", "IEC TS 60909-1:1991")
+        other_part = parse_identity("IEC", "IEC TR 60909-2:2008")
+
+        self.assertIsNone(requested["designation"])
+        self.assertEqual(tr["designation"], "TR")
+        self.assertEqual(ts["designation"], "TS")
+        self.assertEqual(requested["qualifier"], "PART:1")
+        self.assertTrue(identity_matches(requested, tr, check_year=False))
+        self.assertTrue(identity_matches(requested, ts, check_year=False))
+        self.assertFalse(identity_matches(requested, other_part, check_year=False))
+
+        patterns = identity_indexable_like_patterns("IEC", "60909PART1")
+        self.assertIn("IEC TR 60909%", patterns)
+        self.assertIn("IEC TS 60909%", patterns)
+        self.assertIn("IEC PAS 60909%", patterns)
+        self.assertIn("IEC GUIDE 60909%", patterns)
+        self.assertIn("IEC/TR 60909%", patterns)
 
     def test_header_label_does_not_override_sdo_in_standard_value(self):
         self.assertEqual(
@@ -1171,6 +1192,63 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(identity_core_appears("IS 875-1", "875"))
         self.assertFalse(identity_core_appears("API 1610", "610"))
 
+    def test_identity_core_appears_keeps_61936_part_lookup_intact(self):
+        # ``61936PART1`` contains the digits ``1936`` before ``P``; year
+        # stripping must not collapse that lookup core to ``6PART1``.
+        self.assertTrue(
+            identity_core_appears(
+                "IEC 61936-1:2021 (EN-FR)",
+                "61936PART1",
+            )
+        )
+
+    def test_ieee_std_number_is_not_rewritten_as_api_std(self):
+        self.assertEqual(
+            canonicalize_search_request("IEEE", "Std 1584"),
+            ("IEEE", "1584", "IEEE"),
+        )
+        self.assertEqual(
+            canonicalize_search_request("API", "Std 610"),
+            ("API", "API STD 610", "API"),
+        )
+        self.assertTrue(
+            self.matches("IEEE", "Std 1584", "IEEE 1584:2018")
+        )
+
+    def test_asme_bpvc_iid_metric_maps_to_catalogue_iidm(self):
+        identity = parse_identity("ASME", "BPVC IID (M)")
+        self.assertEqual(identity["core_number"], "BPVCIIDM")
+        self.assertTrue(
+            self.matches("ASME", "BPVC IID (M)", "BPVC IIDM : 2025")
+        )
+
+    def test_asme_bpvc_sec_x_maps_to_catalogue_bpvc_x(self):
+        identity = parse_identity("ASME", "BPVC Sec. X")
+        self.assertEqual(identity["core_number"], "BPVCX")
+        self.assertIsNone(identity["qualifier"])
+        self.assertTrue(
+            self.matches("ASME", "BPVC Sec. X", "BPVC X : 2025")
+        )
+
+    def test_asme_metric_slash_dual_discovers_non_metric_side(self):
+        from app.core.standard_identity import identity_lookup_core_tokens
+
+        tokens = identity_lookup_core_tokens(
+            "ASME",
+            "36.19M/36.19",
+            None,
+        )
+        self.assertIn("36.19M", tokens)
+        self.assertIn("36.19", tokens)
+        self.assertIn("B36.19", tokens)
+        self.assertTrue(
+            self.matches(
+                "ASME",
+                "B36.19M/36.19",
+                "ASME B36.19 : 2022",
+            )
+        )
+
     def test_row_needs_identity_discovery_skips_strong_local_matches(self):
         row = {
             "identity": parse_identity("API", "API STD 610:2020"),
@@ -1606,6 +1684,27 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
+    def test_api_mpms_chapter_keeps_chapter_number(self):
+        for requested in (
+            "MPMS Ch. 5.6",
+            "API MPMS Ch. 5.6",
+            "API MPMS Chapter 5.6",
+            "MPMS Chapter 5.6",
+        ):
+            with self.subTest(requested=requested):
+                sdo, number, _ = canonicalize_search_request("API", requested)
+                self.assertEqual(sdo, "API")
+                self.assertEqual(number, "API MPMS Chapter 5.6")
+                identity = parse_identity(sdo, number)
+                self.assertEqual(identity.get("qualifier"), "CHAPTER:5-6")
+                self.assertTrue(
+                    self.matches(
+                        "API",
+                        requested,
+                        "API MPMS Chapter 5.6 : 2021",
+                    )
+                )
+
     def test_year_like_catalogue_numbers_keep_identity_core(self):
         for sdo, requested, candidate in (
             ("API", "2003", "API RP 2003 : 2015 (R2020)"),
@@ -1750,6 +1849,9 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_part_range_matches_a_part_inside_the_range(self):
+        ranged = parse_identity("IEC", "60947 (Pt 1-8)")
+        self.assertEqual(ranged["qualifier"], "PART:1-8")
+        self.assertTrue(ranged["family_lookup"])
         self.assertTrue(
             self.matches(
                 "IEC",
@@ -1764,6 +1866,42 @@ class StandardIdentityTests(unittest.TestCase):
                 "IEC 60947-9:2020",
             )
         )
+
+    def test_plural_parts_range_is_not_part_section_compound(self):
+        identity = parse_identity(
+            "IEC",
+            "61511 Parts 0-4 with subsections (Total- 6 codes)",
+        )
+        self.assertEqual(identity["core_number"], "61511")
+        self.assertEqual(identity["qualifier"], "PART:0-4")
+        self.assertTrue(identity["family_lookup"])
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC TR 61511-0:2018",
+            )
+        )
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC 61511-3:2016 (EN-FR)",
+            )
+        )
+        self.assertFalse(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC 61508-1:2010 (EN-FR)",
+            )
+        )
+
+    def test_singular_part_hyphen_section_still_splits(self):
+        identity = parse_identity("IEC", "IEC 60079 Part 35-2")
+        self.assertEqual(identity["core_number"], "60079PART35")
+        self.assertEqual(identity["qualifier"], "SECTION:2")
+        self.assertFalse(identity["family_lookup"])
 
     def test_parenthesized_part_range_expands_to_clean_part_identifiers(self):
         expanded = DocumentService()._expand_canonical_rows([{
@@ -2729,6 +2867,24 @@ class StandardIdentityTests(unittest.TestCase):
             all("duplicate_requests" not in result for result in results)
         )
 
+    def test_asme_errata_records_are_not_base_standard_matches(self):
+        errata = SimpleNamespace(
+            standardno="ASME B36.19 Errata:2023",
+            display_stdNo="ASME B36.19 Errata:2023",
+            title="",
+        )
+        base = SimpleNamespace(
+            standardno="B36.19",
+            display_stdNo="ASME B36.19 : 2022",
+            title="",
+        )
+        self.assertTrue(
+            DocumentSearchService._candidate_should_be_excluded(errata)
+        )
+        self.assertFalse(
+            DocumentSearchService._candidate_should_be_excluded(base)
+        )
+
     def test_ul_red_line_and_revision_records_are_not_base_standard_matches(self):
         candidates = [
             SimpleNamespace(
@@ -2879,6 +3035,41 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertIn("PCC-2%", patterns)
         self.assertIn("ASME PCC 2%", patterns)
         self.assertIn("ASME PCC2%", patterns)
+
+    def test_glued_title_prose_is_detached_from_designation(self):
+        cases = [
+            (
+                "IEC",
+                "60214-1Tap changers-Part-1: Performance requirements and test method",
+                "60214",
+                "PART:1",
+            ),
+            (
+                "IEC",
+                "IEC 60214-2Tap changers-Part-2: Application guide",
+                "60214",
+                "PART:2",
+            ),
+            (
+                "IEC",
+                "60529Degrees of protection provided by enclosures (IP Code)",
+                "60529",
+                None,
+            ),
+            (
+                "IEC",
+                "62271-1:2026High-voltage switchgear and controlgear",
+                "62271",
+                "PART:1",
+            ),
+        ]
+        for sdo, display, core, qualifier in cases:
+            with self.subTest(display=display):
+                identity = parse_identity(sdo, display)
+                self.assertEqual(identity.get("core_number"), core)
+                self.assertEqual(identity.get("qualifier"), qualifier)
+                if "2026" in display:
+                    self.assertEqual(identity.get("year"), 2026)
 
 
 if __name__ == "__main__":

@@ -161,7 +161,8 @@ def _code_only_committee_rows(items, sdo_title):
 
 _VARIANT_COPY_RE = re.compile(
     r"(?i)(?:^|[^A-Z0-9])"
-    r"(?:CMV|RLV|REDLINE|CSV|AMD\d*|AMEND(?:MENT)?|CORR(?:IGENDUM)?|COR\d*)"
+    r"(?:CMV|RLV|REDLINE|CSV|AMD\d*|AMEND(?:MENT)?|CORR(?:IGENDUM)?|COR\d*"
+    r"|ERRATA|ADDEND(?:UM|A)?)"
     r"(?:[^A-Z0-9]|$)"
 )
 

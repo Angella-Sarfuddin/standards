@@ -577,16 +577,17 @@ def assemble_results(
                     and int(actual_year) < int(requested_year)
                 )
                 if is_match and requested_year_is_newer_than_database:
-                    # Never present an older database edition as a match
-                    # for a newer, explicitly requested edition.
+                    # Never present an older database edition as a Found match
+                    # for a newer, explicitly requested edition. Surface it as
+                    # an older-version notice instead.
                     is_match = False
-                    status = "NOT FOUND"
+                    status = "OLDER VERSION AVAILABLE"
 
                 status_detail = (
                     (
-                        f"No database edition is available for requested "
-                        f"year {requested_year}; latest available database "
-                        f"edition is {actual_year}."
+                        f"Requested year {requested_year} is not in the "
+                        f"catalogue; available in older version "
+                        f"{actual_year}."
                         if requested_year_is_newer_than_database
                         else f"Requested year {requested_year}; returned latest available edition {actual_year}."
                     )

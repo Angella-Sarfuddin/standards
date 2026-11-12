@@ -220,7 +220,9 @@ class StandardsRepository:
 
             if containment:
                 bucket["containment"][core] = containment
-            elif bound:
+            # Separator-preserving patterns (``ASME B36.19%``) are bound even
+            # when a long-core containment key is also present.
+            if bound:
                 bucket["bound"].setdefault(core, set()).update(bound)
 
         if not grouped:

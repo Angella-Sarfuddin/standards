@@ -40,6 +40,33 @@ def _api_edition_suffix(value: str, end: int) -> str:
     return f" : {match.group(1)}" if match else ""
 
 
+_API_MPMS_CHAPTER_RE = re.compile(
+    r"(?is)^(?:API\s+)?MPMS\s+"
+    r"(?:(?:CHAPTER|CH\.?)\s*)?"
+    r"(?P<number>\d+(?:[./]\d+)*[A-Z]?)"
+    r"(?:\s*:\s*(?P<year>(?:19|20)\d{2}))?"
+    r"\s*$"
+)
+
+
+def _normalize_api_mpms_chapter(display: str) -> Optional[str]:
+    """Keep API MPMS chapter numbers (``Ch. 5.6`` / ``Chapter 5.6``).
+
+    Generic API cleanup otherwise treats ``MPMS`` as the whole number and
+    drops the chapter, so ``API MPMS Ch. 5.6`` collapses to ``API MPMS``.
+    Catalogue rows are stored as ``API MPMS Chapter 5.6``. Require a full
+    designation match so withdrawn/replaced sentences are not truncated.
+    """
+    match = _API_MPMS_CHAPTER_RE.match(str(display or "").strip())
+    if not match:
+        return None
+    number = match.group("number").replace("/", ".")
+    normalized = f"API MPMS Chapter {number}"
+    if match.group("year"):
+        normalized = f"{normalized} : {match.group('year')}"
+    return normalized
+
+
 def _api_core_index_forms(compact: str) -> List[str]:
     forms = [compact]
     for index in range(1, len(compact)):
@@ -172,8 +199,10 @@ def split_stated_replacement(value: str) -> Optional[Dict]:
     return {"original": original, "replacement": replacement}
 
 
-def _prepare_printed_designation(display: str) -> str:
+def _prepare_printed_designation(display: str, sdo: str = "") -> str:
     """Drop title prose and BIS print marks that hide the designation."""
+    display = _detach_glued_title_prose(display)
+    sdo_norm = normalize_tokens(sdo)
     display = re.sub(
         r"(?i)^standard\s*[-:]\s*(?=(?:IS|BIS)\b)",
         "",
@@ -221,6 +250,28 @@ def _prepare_printed_designation(display: str) -> str:
         display,
     ).strip()
     display = COMPACT_REVIEW_NOTE_RE.sub("", display).strip()
+    # ASME metric/customary markers must survive parenthesis stripping.
+    # ``BPVC IID (M)`` is stored as ``BPVC IIDM``; ``(C)`` as ``IIDC``.
+    display = re.sub(
+        r"(?i)\b(BPVC\s+IID)\s*[\(\[]\s*M(?:ETRIC)?\s*[\)\]]",
+        r"\1M",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\b(BPVC\s+IID)\s*[\(\[]\s*C(?:USTOMARY)?\s*[\)\]]",
+        r"\1C",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\bBPVC\s+II\s*D\s*[\(\[]\s*M(?:ETRIC)?\s*[\)\]]",
+        "BPVC IIDM",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\bBPVC\s+II\s*D\s*[\(\[]\s*C(?:USTOMARY)?\s*[\)\]]",
+        "BPVC IIDC",
+        display,
+    )
     # Strip all non-identity parentheses in one pass so catalogue notes
     # such as "(2025)", "(VE2)", "(Previously …)", or "(IEC …)" never
     # become part of the searchable core.
@@ -234,7 +285,15 @@ def _prepare_printed_designation(display: str) -> str:
     # API source tables commonly append edition/errata metadata and a title
     # after the identifier. Keep only the designation and let API matching
     # resolve bare numbers against STD/RP/SPEC catalogue variants.
-    if re.match(
+    # Do not rewrite bare ``Std 1584`` to ``API STD 1584`` when the request
+    # SDO is IEEE (or another non-API publisher).
+    mpms_chapter = _normalize_api_mpms_chapter(display)
+    if mpms_chapter:
+        display = mpms_chapter
+    elif (
+        sdo_norm in {"", "API"}
+        or re.match(r"(?i)^API\b", display)
+    ) and re.match(
         r"(?i)^(?:API\b|(?:STD|RP|SPEC|BULL|PUBL|PUB|STANDARD)\s+)",
         display,
     ):
@@ -245,7 +304,7 @@ def _prepare_printed_designation(display: str) -> str:
             r"(?=\s|:|$)",
             display,
         )
-        if api_match:
+        if api_match and str(api_match.group("number") or "").upper() != "MPMS":
             kind = _canonical_api_designation(api_match.group("kind"))
             edition = _api_edition_suffix(display, api_match.end())
             display = "API "
@@ -383,6 +442,10 @@ DESIGNATION_TOKENS = {
     "SPECIAL PUBLICATION",
     "TR",
     "TECHNICAL REPORT",
+    "TS",
+    "TECHNICAL SPECIFICATION",
+    "PAS",
+    "PUBLICLY AVAILABLE SPECIFICATION",
     "DIS",
     "MPMS",
     "BUL",
@@ -393,6 +456,26 @@ DESIGNATION_TOKENS = {
     "PUBLICATION",
     "GUIDE",
 }
+
+# Publication-type markers that may sit between an IEC/ISO-style publisher
+# and the number (``IEC TR 60909-1``, ``ISO/TS 16949``). Bare number asks
+# must discover these catalogue spellings when the base row is absent.
+_OPTIONAL_PUBLICATION_TYPES = (
+    "TR",
+    "TS",
+    "PAS",
+    "GUIDE",
+)
+_OPTIONAL_PUBLICATION_TYPE_SDOS = frozenset(
+    {
+        "IEC",
+        "ISO",
+        "CEN",
+        "CENELEC",
+        "CLC",
+        "EN",
+    }
+)
 
 SDO_IDENTIFIER_PREFIX_ALIASES = {
     "ISO": ("ISO/IEC", "ISO/TS", "ISO/TR"),
@@ -461,6 +544,81 @@ def clean(value: str) -> str:
     value = value.replace('"', "").replace("'", "")
     value = re.sub(r"\s+", " ", value)
     return value.strip()
+
+
+# Tokens that may legally follow a numeric designation. Anything else after
+# the number is treated as glued/trailing title prose.
+_DESIGNATION_CONTINUATION_WORDS = {
+    "PART",
+    "PARTS",
+    "PT",
+    "SECTION",
+    "SEC",
+    "CHAPTER",
+    "CH",
+    "SERIES",
+    "SER",
+    "AMD",
+    "AMENDMENT",
+    "CORR",
+    "COR",
+    "REV",
+    "VOLUME",
+    "VOL",
+    "AND",
+    "STD",
+    "RP",
+    "SPEC",
+    "TR",
+    "EN",
+    "ISO",
+    "IEC",
+    "IEEE",
+    "CSV",
+    "RLV",
+    "PRV",
+    "EXV",
+    "DIVISION",
+    "DIV",
+}
+
+
+def _detach_glued_title_prose(display: str) -> str:
+    """Split designation from title text glued without a space.
+
+    Source cells often look like ``IEC 60529Degrees of protection...`` or
+    ``60214-1Tap changers...``. Insert a boundary before Title-case prose,
+    then drop trailing text that is not a designation continuation.
+    """
+    display = str(display or "").strip()
+    if not display:
+        return display
+
+    # ``60529Degrees``, ``1Tap``, ``2026High-voltage``
+    display = re.sub(r"(?<=\d)(?=[A-Z][a-z])", " ", display)
+
+    match = re.match(
+        r"(?is)^(?P<head>"
+        r"(?:(?:[A-Z]{2,}(?:\s*/\s*[A-Z]{2,})*)\s+)?"
+        r"(?:(?:STD|RP|SPEC|SP|TR|BULL|PUBL|PUB|GUIDE|MPMS)\s+)?"
+        r"[A-Z]?\d[\w./+-]*"
+        r"(?:\s*:\s*(?:19|20)\d{2})?"
+        r")"
+        r"(?P<rest>\s+.*)?$",
+        display,
+    )
+    if not match or not match.group("rest"):
+        return display.strip()
+
+    rest = match.group("rest").strip()
+    first = re.match(r"([A-Za-z]+)", rest)
+    if not first:
+        return display.strip()
+
+    token = first.group(1).upper()
+    if token in _DESIGNATION_CONTINUATION_WORDS or token.startswith("PART"):
+        return display.strip()
+    return match.group("head").strip()
 
 
 @lru_cache(maxsize=32768)
@@ -566,56 +724,109 @@ def identity_index_cores(sdo_name: str, core: str, raw: str = "") -> List[str]:
     return list(dict.fromkeys(cores))
 
 
+def _dual_designation_lookup_pieces(core_token: str) -> List[str]:
+    """Expand ``B36.19M/36.19`` into searchable sides and non-metric forms."""
+    core = normalize_tokens(core_token)
+    if not core:
+        return []
+
+    pieces: List[str] = []
+    if "/" in core:
+        left, right = core.split("/", 1)
+        left_compact = re.sub(r"\s+", "", left)
+        right_compact = re.sub(r"\s+", "", right)
+        # Keep joint publisher chains and true duals like A991/A991M intact as
+        # one token; only split alternative number pairs.
+        if not (
+            left_compact and left_compact in right_compact
+        ) and not re.match(
+            r"(?i)^(ISO|EN|IEC|NACE|SSPC)",
+            right_compact,
+        ) and re.search(r"\d", left) and re.search(r"\d", right):
+            pieces.extend(
+                piece.strip()
+                for piece in (left, right)
+                if piece and piece.strip()
+            )
+        else:
+            pieces.append(core)
+    else:
+        pieces.append(core)
+
+    expanded: List[str] = []
+    for piece in pieces:
+        expanded.append(piece)
+        # Metric ``M`` suffix: also search the customary/base number.
+        metric = re.fullmatch(
+            r"(?i)(?P<head>.*\d)M",
+            re.sub(r"\s+", "", piece),
+        )
+        if metric:
+            stripped = re.sub(r"(?i)M$", "", piece).rstrip(" -/")
+            if stripped and stripped != piece:
+                expanded.append(stripped)
+    return list(dict.fromkeys(expanded))
+
+
 def identity_lookup_core_tokens(
     sdo_name: str,
     core_token: str,
     qualifier: str = None,
 ) -> List[str]:
     """Add catalogue query forms for legacy IEC numbers without the ``60``."""
-    core = normalize_tokens(core_token)
-    if not core:
-        return []
-
     qualifier_text = str(qualifier or "").upper()
     part = re.fullmatch(r"PART:(\d+)", qualifier_text)
     section = re.fullmatch(r"SECTION:(\d+)", qualifier_text)
-    root = normalize_identity_core(core)
-    numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", root)
-    tokens = []
-    # A part or section request must not search the bare root. "60079%"
-    # returns every part of that standard.
-    if section and numbered:
-        tokens.append(
-            f"{numbered.group('root')} PART {int(numbered.group('part'))} "
-            f"SECTION {int(section.group(1))}"
-        )
-    elif (
-        part
-        and re.fullmatch(r"\d{4,}", root)
-        and not re.search(r"[-./]", core)
-    ):
-        # Hyphenated catalogue ids such as ``60076-57-1202`` keep the
-        # separators in the lookup token. Searching ``6007657 PART 1202``
-        # misses those rows because they never spell the word PART.
-        tokens.append(f"{root} PART {int(part.group(1))}")
-        # BIS catalogue numbers commonly store the part separator as
-        # punctuation (``IS 1893 : Part 3``), so the normalized part token
-        # is not always searchable with a literal LIKE pattern. Include the
-        # root only for BIS/IS; candidate identity matching below still
-        # enforces the requested part exactly.
-        if normalize_tokens(sdo_name) in {"IS", "BIS"}:
-            tokens.append(root)
-    elif numbered:
-        tokens.append(
-            f"{numbered.group('root')} PART {int(numbered.group('part'))}"
-        )
-    else:
-        tokens.append(core)
-        if (
-            normalize_tokens(sdo_name) == "IEC"
-            and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
+    tokens: List[str] = []
+
+    for piece in _dual_designation_lookup_pieces(core_token):
+        core = normalize_tokens(piece)
+        if not core:
+            continue
+        root = normalize_identity_core(core)
+        numbered = re.fullmatch(r"(?P<root>\d+)PART(?P<part>\d+)", root)
+        # A part or section request must not search the bare root. "60079%"
+        # returns every part of that standard.
+        if section and numbered:
+            tokens.append(
+                f"{numbered.group('root')} PART {int(numbered.group('part'))} "
+                f"SECTION {int(section.group(1))}"
+            )
+        elif (
+            part
+            and re.fullmatch(r"\d{4,}", root)
+            and not re.search(r"[-./]", core)
         ):
-            tokens.append(f"60{core}")
+            # Hyphenated catalogue ids such as ``60076-57-1202`` keep the
+            # separators in the lookup token. Searching ``6007657 PART 1202``
+            # misses those rows because they never spell the word PART.
+            tokens.append(f"{root} PART {int(part.group(1))}")
+            # BIS catalogue numbers commonly store the part separator as
+            # punctuation (``IS 1893 : Part 3``), so the normalized part token
+            # is not always searchable with a literal LIKE pattern. Include the
+            # root only for BIS/IS; candidate identity matching below still
+            # enforces the requested part exactly.
+            if normalize_tokens(sdo_name) in {"IS", "BIS"}:
+                tokens.append(root)
+        elif numbered:
+            tokens.append(
+                f"{numbered.group('root')} PART {int(numbered.group('part'))}"
+            )
+        else:
+            tokens.append(core)
+            if (
+                normalize_tokens(sdo_name) == "IEC"
+                and re.fullmatch(r"\d{3}(?:[-./]\d+)*", core)
+            ):
+                tokens.append(f"60{core}")
+            # ASME strips the leading ``B`` from cores such as ``B36.19``.
+            # Discovery still needs the printed ``B…`` form for LIKE/fulltext.
+            if (
+                normalize_tokens(sdo_name) == "ASME"
+                and re.match(r"^\d", core)
+            ):
+                tokens.append(f"B{core}")
+                tokens.append(f"B {core}")
     return list(dict.fromkeys(tokens))
 
 
@@ -684,12 +895,33 @@ _UNPREFIXED_DESIGNATIONS = (
     "SPEC",
     "SP",
     "TR",
+    "TS",
+    "PAS",
     "BUL",
     "BULL",
     "PUB",
     "GUIDE",
     "MPMS",
 )
+
+
+def _optional_publication_type_prefixes(sdo_prefix: str) -> Tuple[str, ...]:
+    """Publisher + TR/TS/PAS/Guide spellings for bare-number discovery.
+
+    Catalogue rows such as ``IEC TR 60909-1`` are not found by ``IEC 60909%``
+    because the type marker sits between the publisher and the number. These
+    left-anchored forms keep the index seek while still admitting the typed
+    variant. Slash forms cover ``IEC/TR`` / ``ISO/TS`` printings.
+    """
+    prefix = normalize_tokens(sdo_prefix)
+    if not prefix or prefix not in _OPTIONAL_PUBLICATION_TYPE_SDOS:
+        return ()
+
+    spellings: List[str] = []
+    for marker in _OPTIONAL_PUBLICATION_TYPES:
+        spellings.append(f"{prefix} {marker}")
+        spellings.append(f"{prefix}/{marker}")
+    return tuple(dict.fromkeys(spellings))
 
 
 def identity_unprefixed_like_patterns(core_pattern: str, core: str) -> List[str]:
@@ -709,6 +941,19 @@ def identity_unprefixed_like_patterns(core_pattern: str, core: str) -> List[str]
     return list(dict.fromkeys(patterns))
 
 
+def _discovery_sdo_prefixes(sdo_prefix: str) -> Tuple[str, ...]:
+    """SDO spellings used for discovery, including optional TR/TS/PAS/Guide."""
+    prefixes = list(sdo_identifier_prefixes(sdo_prefix))
+    if not prefixes:
+        return ()
+    prefixes.extend(_optional_publication_type_prefixes(sdo_prefix))
+    for base in list(sdo_identifier_prefixes(sdo_prefix)):
+        if base == normalize_tokens(sdo_prefix):
+            continue
+        prefixes.extend(_optional_publication_type_prefixes(base))
+    return tuple(dict.fromkeys(prefixes))
+
+
 def identity_like_patterns_for_hint(
     sdo_prefix: str,
     core_token: str,
@@ -717,7 +962,7 @@ def identity_like_patterns_for_hint(
     core_text = normalize_tokens(core_token)
     core = normalize_identity_core(core_text)
     core_pattern = identity_core_sql_pattern(core_text)
-    prefixes = sdo_identifier_prefixes(sdo_prefix)
+    prefixes = _discovery_sdo_prefixes(sdo_prefix)
 
     if not prefixes or not core or not core_pattern:
         return "", []
@@ -757,15 +1002,37 @@ def identity_discovery_terms(
     core_text = normalize_tokens(core_token)
     core = normalize_identity_core(core_text)
     core_pattern = identity_core_sql_pattern(core_text)
-    prefixes = sdo_identifier_prefixes(sdo_prefix)
+    prefixes = _discovery_sdo_prefixes(sdo_prefix)
 
     if not prefixes or not core or not core_pattern:
         return "", None, []
 
     if len(core) >= _MIN_CONTAINMENT_CORE_LEN:
-        return core, core_pattern, []
+        # Compact index forms drop separators (``B36.19`` -> ``B3619``).
+        # Keep left-anchored dotted/spaced spellings so catalogue rows such
+        # as ``ASME B36.19`` remain discoverable from dual/metric asks.
+        bound: List[str] = []
+        if re.search(r"[.\-/]", core_text):
+            raw_forms = list(
+                dict.fromkeys(
+                    (
+                        core_text,
+                        core_text.replace(" ", ""),
+                    )
+                )
+            )
+            for prefix in prefixes:
+                for form in raw_forms:
+                    for pattern in (
+                        f"{prefix} {form}%",
+                        f"{prefix}{form}%",
+                        f"{form}%",
+                    ):
+                        if like_pattern_is_prefix_indexable(pattern):
+                            bound.append(pattern)
+        return core, core_pattern, list(dict.fromkeys(bound))
 
-    bound: List[str] = []
+    bound = []
     for prefix in prefixes:
         bound.extend(identity_bound_like_patterns(prefix, core_pattern))
     return core, None, list(dict.fromkeys(bound))
@@ -795,6 +1062,11 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         else ()
     )
     api_spellings = API_IDENTITY_PREFIXES if prefix == "API" else ()
+    publication_spellings = (
+        ()
+        if joint_spellings or api_spellings
+        else _optional_publication_type_prefixes(prefix)
+    )
     if not numbered_part and joint_spellings:
         for spelling in joint_spellings:
             patterns.extend([
@@ -819,6 +1091,16 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
                 for spelling in api_spellings
                 for core_form in _api_core_index_forms(compact)
             )
+        for spelling in publication_spellings:
+            patterns.extend([
+                f"{spelling} {compact}%",
+                f"{spelling}{compact}%",
+            ])
+            for sep_form in _letter_digit_separator_forms(compact):
+                patterns.extend([
+                    f"{spelling} {sep_form}%",
+                    f"{spelling}{sep_form}%",
+                ])
         glued = normalize_identity_core(prefix)
         compact_prefix = prefix.replace(" ", "")
         if glued and glued not in {prefix, compact_prefix}:
@@ -837,11 +1119,14 @@ def identity_indexable_like_patterns(sdo_prefix: str, core: str) -> List[str]:
         root = numbered_part.group("root")
         part = str(int(numbered_part.group("part")))
         section = numbered_part.group("section")
-        for spelling in (
+        spellings = list(
             joint_spellings
             or api_spellings
             or sdo_identifier_prefixes(prefix)
-        ):
+        )
+        if publication_spellings:
+            spellings.extend(publication_spellings)
+        for spelling in dict.fromkeys(spellings):
             if len(root) >= 4:
                 patterns.append(f"{spelling} {root}%")
                 continue
@@ -974,10 +1259,11 @@ def identity_core_appears(normalized_value: str, core: str) -> bool:
     """
     value = normalize_identity_core(normalized_value)
     core = normalize_identity_core(core)
-    # Drop embedded edition years so MR0175-2021-ISO and SP 55:2025 AND…
-    # still contain the designation core.
+    # Drop embedded edition years from catalogue text so MR0175-2021-ISO and
+    # SP 55:2025 AND… still contain the designation core. Do not strip the
+    # lookup core: ``61936PART1`` contains ``1936`` before ``P`` and must not
+    # collapse to ``6PART1``.
     value = re.sub(r"(?<=\d)(?:19|20)\d{2}(?=[A-Z])", "", value)
-    core = re.sub(r"(?<=\d)(?:19|20)\d{2}(?=[A-Z])", "", core)
     if not value or not core:
         return False
 
@@ -1261,7 +1547,7 @@ def _split_designation(body: str) -> Tuple[Optional[str], str]:
 
 def _prepare_display(display: str) -> str:
     """Collapse wording that is not part of the stored designation."""
-    display = display.lstrip("/").strip()
+    display = _detach_glued_title_prose(display.lstrip("/").strip())
     # Some source lists put the publication year between the root number and
     # an explicit part, e.g. ``61508:2010 PART 6``. Move it after the part so
     # normal year extraction does not fold the year into the standard number.
@@ -1326,6 +1612,27 @@ def _prepare_display(display: str) -> str:
         display,
     ).strip()
     display = COMPACT_REVIEW_NOTE_RE.sub("", display).strip()
+    # ASME metric/customary markers must survive parenthesis stripping.
+    display = re.sub(
+        r"(?i)\b(BPVC\s+IID)\s*[\(\[]\s*M(?:ETRIC)?\s*[\)\]]",
+        r"\1M",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\b(BPVC\s+IID)\s*[\(\[]\s*C(?:USTOMARY)?\s*[\)\]]",
+        r"\1C",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\bBPVC\s+II\s*D\s*[\(\[]\s*M(?:ETRIC)?\s*[\)\]]",
+        "BPVC IIDM",
+        display,
+    )
+    display = re.sub(
+        r"(?i)\bBPVC\s+II\s*D\s*[\(\[]\s*C(?:USTOMARY)?\s*[\)\]]",
+        "BPVC IIDC",
+        display,
+    )
     # Strip all non-identity parentheses in one pass so catalogue notes
     # such as "(2025)", "(VE2)", "(Previously …)", or "(IEC …)" never
     # become part of the searchable core. Part/section parentheses stay.
@@ -1421,8 +1728,26 @@ def _prepare_display(display: str) -> str:
         "SECTION ",
         display,
     )
+    # Catalogue stores section-only BPVC roman forms as ``BPVC X``, not
+    # ``BPVC SECTION X``. Collapse before SECTION becomes a qualifier.
+    display = re.sub(
+        r"(?i)\bBPVC\s+SECTION\s+"
+        r"(XIII|XII|XI|VIII|VII|VI|IV|III|II|IX|X|V|I)\b"
+        r"(?!\s+PART)",
+        r"BPVC \1",
+        display,
+    )
     display = re.sub(r"(?i)\bDIV(?:ISION)?\s*-?\s*(\d+)", r"DIVISION \1", display)
     display = re.sub(r"(?i)\bPARTS?\s*-?\s*([A-Z0-9]+)\b", r"PART \1", display)
+    # Package asks such as ``Parts 0-4 with subsections (Total- 6 codes)``
+    # leave a ranged PART qualifier; strip the packaging prose so the range
+    # remains the trailing identity token.
+    display = re.sub(r"(?i)\s+with subsections\b.*$", "", display).strip()
+    display = re.sub(
+        r"(?i)\s*\(?\s*total\s*[-:]\s*\d+\s*codes?\s*\)?\s*$",
+        "",
+        display,
+    ).strip()
     display = re.sub(r"(?i)\s+CMV\s*$", "", display).strip()
     display = re.sub(r"\s+", " ", display).strip(" -/")
     return display
@@ -1520,7 +1845,7 @@ def canonicalize_search_request(
     the number so withdrawn / edition text does not hide the designation.
     """
     sdo, joint_prefix = _normalize_bis_joint_sdo(sdo_name)
-    display = _prepare_printed_designation(clean(display_number))
+    display = _prepare_printed_designation(clean(display_number), sdo=sdo)
     display = _normalize_bis_joint_display(display)
     if joint_prefix and not re.match(
         rf"(?i)^{re.escape(joint_prefix)}(?=$|[\s:/.-]|\d)",
@@ -1528,20 +1853,27 @@ def canonicalize_search_request(
     ):
         display = f"{joint_prefix} {display}".strip()
     if sdo == "API":
-        api_match = re.match(
-            r"(?is)^(?:(?:API)\s+)?"
-            rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
-            r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
-            r"(?=\s|:|$)",
-            display,
-        )
-        if api_match:
-            kind = _canonical_api_designation(api_match.group("kind"))
-            edition = _api_edition_suffix(display, api_match.end())
-            display = (
-                f"API {kind + ' ' if kind else ''}"
-                f"{api_match.group('number')}{edition}"
+        mpms_chapter = _normalize_api_mpms_chapter(display)
+        if mpms_chapter:
+            display = mpms_chapter
+        else:
+            api_match = re.match(
+                r"(?is)^(?:(?:API)\s+)?"
+                rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
+                r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
+                r"(?=\s|:|$)",
+                display,
             )
+            if (
+                api_match
+                and str(api_match.group("number") or "").upper() != "MPMS"
+            ):
+                kind = _canonical_api_designation(api_match.group("kind"))
+                edition = _api_edition_suffix(display, api_match.end())
+                display = (
+                    f"API {kind + ' ' if kind else ''}"
+                    f"{api_match.group('number')}{edition}"
+                )
     sdo, display = _catalogue_sdo_for_adoption(sdo, display)
     stated_replacement = split_stated_replacement(display)
     if stated_replacement:
@@ -1896,9 +2228,13 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     value = _prepare_display(original_value)
     if sdo in {"IS", "BIS"}:
         value = _normalize_bis_joint_display(value)
+    # Only suppress year extraction while title text is still glued into the
+    # designation. After a successful detach (``2026High`` -> ``2026``), the
+    # edition year must be parsed normally.
     concatenated_title = (
         value != original_value
         and bool(re.search(r"\d[A-Za-z]", original_value))
+        and bool(re.search(r"\d[A-Za-z]", value))
     )
 
     # API source tables often append edition, errata, dates, and the words
@@ -1906,20 +2242,27 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
     # first identifier so the normal API variant matching can resolve STD/RP/
     # SPEC catalogue records.
     if sdo == "API":
-        api_match = re.match(
-            r"(?is)^API\s+"
-            rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
-            r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
-            r"(?=\s|:|$)",
-            value,
-        )
-        if api_match:
-            edition = _api_edition_suffix(value, api_match.end())
-            value = "API "
-            kind = _canonical_api_designation(api_match.group("kind"))
-            if kind:
-                value += f"{kind} "
-            value += api_match.group("number") + edition
+        mpms_chapter = _normalize_api_mpms_chapter(value)
+        if mpms_chapter:
+            value = mpms_chapter
+        else:
+            api_match = re.match(
+                r"(?is)^API\s+"
+                rf"(?:(?P<kind>{API_DESIGNATION_PATTERN})\s+)?"
+                r"(?P<number>[A-Z0-9]+(?:[./-][A-Z0-9]+)*)"
+                r"(?=\s|:|$)",
+                value,
+            )
+            if (
+                api_match
+                and str(api_match.group("number") or "").upper() != "MPMS"
+            ):
+                edition = _api_edition_suffix(value, api_match.end())
+                value = "API "
+                kind = _canonical_api_designation(api_match.group("kind"))
+                if kind:
+                    value += f"{kind} "
+                value += api_match.group("number") + edition
 
     value = re.sub(
         r"(?i)\s*[\(\[]\s*(?:I-P|SI|IP)\s*[\)\]]",
@@ -2082,14 +2425,19 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         r"\1 \2",
         core,
     )
-    # "Part 35-2" is part 35, section 2. The same split is used for a
-    # bare numeric tail such as "35-2".
+    # "Part 35-2" is part 35, section 2. Ascending pairs such as
+    # "Parts 0-4" / "Pt 1-8" are part ranges, not part/section compounds.
+    def _part_hyphen_tail(match: re.Match) -> str:
+        label = match.group("label")
+        start = int(match.group("part"))
+        end = int(match.group("section"))
+        if start < end:
+            return f"{label} {start}-{end}"
+        return f"{label} {start} SECTION {end}"
+
     core = re.sub(
         r"(?i)\b(?P<label>PART|PT)\s*(?P<part>\d+)\s*-\s*(?P<section>\d{1,2})\s*$",
-        lambda match: (
-            f"{match.group('label')} {int(match.group('part'))} SECTION "
-            f"{int(match.group('section'))}"
-        ),
+        _part_hyphen_tail,
         core,
     )
     # A trailing part and section may be written as words or as two short
@@ -2135,6 +2483,16 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
         )
         if not core_number:
             core_number = qualifier_value
+        # ``PART:0-4`` / ``PART:1-8`` identify a family slice, same as SERIES.
+        range_qualifier = re.fullmatch(
+            r"PART:(\d+)-(\d+)",
+            str(qualifier or ""),
+        )
+        if range_qualifier:
+            start = int(range_qualifier.group(1))
+            end = int(range_qualifier.group(2))
+            if start <= end and end - start <= 40:
+                family_lookup = True
     else:
         compound_section = re.match(
             r"^(?P<base>.+)-(?P<section>\d+)\.(?P<subsection>\d+)$",
@@ -2595,6 +2953,31 @@ def identity_matches(
             and not str(candidate_qualifier).startswith("SERIES")
         ):
             return False
+        # ``PART:0-4`` family asks still honor the numeric bounds. A bare
+        # ``PART`` / single-part subsections request stays open under the root.
+        if re.fullmatch(r"PART:\d+-\d+", str(requested_qualifier or "")):
+            if candidate_qualifier and candidate_qualifier.startswith("PART:"):
+                if not _qualifier_range_covers(
+                    requested_qualifier,
+                    candidate_qualifier,
+                ):
+                    return False
+            elif candidate_qualifier and candidate_qualifier.startswith(
+                "SECTION:"
+            ):
+                # ``61508-3-1`` stores part in the core and section in the
+                # qualifier. Bound the embedded part against the requested range.
+                part_in_core = re.fullmatch(
+                    rf"{re.escape(requested_core)}PART(\d+)",
+                    candidate_core,
+                )
+                if not part_in_core or not _qualifier_range_covers(
+                    requested_qualifier,
+                    f"PART:{int(part_in_core.group(1))}",
+                ):
+                    return False
+            else:
+                return False
     elif requested.get("qualifier") == "SERIES":
         if not (
             candidate_core == requested_core
