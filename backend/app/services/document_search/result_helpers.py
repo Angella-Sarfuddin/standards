@@ -9,6 +9,7 @@ from app.core.standard_identity import (
     parse_identity,
 )
 from app.services.document_search.lifecycle_status import (
+    _lifecycle_status_from_evidence,
     _normalize_unavailable_status_label,
 )
 
@@ -145,7 +146,7 @@ def deduplicate_results(results, service_class):
                     if reason == "SDO not found"
                     else (
                         "No available catalog record was found, and no "
-                        "withdrawn or historical status was identified."
+                        "unavailable lifecycle status was identified."
                         if reason == "Not found in catalog"
                         else f"The requested edition is {reason.casefold()}."
                     )
@@ -216,20 +217,15 @@ def _normalize_unmatched_lifecycle_status(result):
     direct = _normalize_unavailable_status_label(result.get("status"))
     if direct in {"WITHDRAWN", "HISTORICAL"}:
         return direct
-    evidence = " ".join(
-        str(value or "")
-        for value in (
-            result.get("status"),
-            result.get("status_detail"),
-            result.get("catalog_status"),
-            result.get("superseded_by"),
-            result.get("replacement_standard"),
-            ((result.get("standard") or {}) or {}).get("catalog_status")
-            if isinstance(result.get("standard"), dict)
-            else None,
-        )
+    recovered = _lifecycle_status_from_evidence(
+        result.get("status_detail"),
+        result.get("catalog_status"),
+        result.get("superseded_by"),
+        result.get("replacement_standard"),
+        ((result.get("standard") or {}) or {}).get("catalog_status")
+        if isinstance(result.get("standard"), dict)
+        else None,
     )
-    recovered = _normalize_unavailable_status_label(evidence)
     if recovered in {"WITHDRAWN", "HISTORICAL"}:
         return recovered
     return None
@@ -239,25 +235,10 @@ def not_found_reason(result):
     """Classify unmatched rows using lifecycle evidence when available."""
     status = str(result.get("status") or "").strip().casefold()
     detail = str(result.get("status_detail") or "").strip()
-    replacement = str(
-        result.get("superseded_by")
-        or result.get("replacement_standard")
-        or ""
-    ).strip()
-    evidence = " ".join((status, detail, replacement)).casefold()
     lifecycle = _normalize_unmatched_lifecycle_status(result)
     if lifecycle == "WITHDRAWN":
         return "Withdrawn"
     if lifecycle == "HISTORICAL":
-        return "Historical"
-    if re.search(r"\bwithdrawn\b", evidence):
-        return "Withdrawn"
-    if re.search(r"\bdo\s+not\s+use\b", evidence):
-        return "Withdrawn"
-    if re.search(
-        r"\b(?:historical|historic|superseded|obsolete|archived)\b",
-        evidence,
-    ):
         return "Historical"
     if re.search(
         r"(?i)revision/amendment requests are excluded|standalone "
@@ -265,8 +246,6 @@ def not_found_reason(result):
         detail,
     ):
         return "Standalone amendment request"
-    if re.search(r"\b(?:inactive|discontinued|not available)\b", evidence):
-        return "Unavailable"
     if status == "sdo not found":
         return "SDO not found"
     return "Not found in catalog"
@@ -281,4 +260,7 @@ def format_master_standard(standard):
         "url": standard.url,
         "sdo_id": standard.sdo_id,
         "standardyear": standard.standardyear,
+        "BSBSubscription": int(
+            getattr(standard, "BSBSubscription", 0) or 0
+        ),
     }

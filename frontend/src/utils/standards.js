@@ -268,6 +268,7 @@ export const getSeriesDesignation = (result) => {
 
 export const deduplicateResultRows = (results) => {
   const seen = new Set();
+  const requestOccurrences = new Map();
   return (results || []).filter((result) => {
     const sdo = String(
       result?.requested_sdo || result?.sdo_name || result?.sdo || ""
@@ -288,9 +289,21 @@ export const deduplicateResultRows = (results) => {
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "");
     const sourceIdentity = result?.source_row_identity;
-    const sourceSuffix = sourceIdentity
-      ? `:source:${JSON.stringify(sourceIdentity)}`
-      : `:request:${request}`;
+    // Keep repeated worksheet requests. Only collapse true clones that share
+    // the same source row (or the same synthetic occurrence when no source).
+    let sourceSuffix;
+    if (sourceIdentity) {
+      sourceSuffix = `:source:${JSON.stringify(sourceIdentity)}`;
+    } else {
+      const occurrenceKey = `${sdo}:${request}:${
+        result?.matched && result?.standard ? `found:${resolved}` : "unmatched"
+      }:${String(result?.status || "").toUpperCase()}:${String(
+        result?.status_detail || ""
+      ).toUpperCase()}`;
+      const occurrence = requestOccurrences.get(occurrenceKey) || 0;
+      requestOccurrences.set(occurrenceKey, occurrence + 1);
+      sourceSuffix = `:occurrence:${occurrence}`;
+    }
     const key =
       result?.matched && result?.standard
         ? `found:${sdo}:${resolved}${sourceSuffix}`

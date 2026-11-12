@@ -204,6 +204,9 @@ def assemble_results(
                     "standard matching."
                 ),
                 "standard": None,
+                "bsb_subscription": 0,
+                "parent_status": None,
+                "catalog_status": None,
                 "actions": {"manual_search": True},
                 "_source_request_identity": row.get(
                     "source_request_identity"
@@ -243,6 +246,9 @@ def assemble_results(
                 "matched": False,
                 "status": "SDO NOT FOUND",
                 "standard": None,
+                "bsb_subscription": 0,
+                "parent_status": None,
+                "catalog_status": None,
                 "actions": {"manual_search": True},
                 "_source_request_identity": row.get(
                     "source_request_identity"
@@ -445,6 +451,11 @@ def assemble_results(
                         if status_info
                         else None
                     )
+                    data["parent_status"] = (
+                        status_info.get("parent_name")
+                        if status_info
+                        else None
+                    )
                     actual_year = standard.standardyear
                 else:
                     data = service.search_service.format_standard(standard)
@@ -472,6 +483,17 @@ def assemble_results(
                             ).upper()
                         )
                         is_match = False
+                    if isinstance(data, dict):
+                        data["catalog_status"] = (
+                            status_info.get("name")
+                            if status_info
+                            else None
+                        )
+                        data["parent_status"] = (
+                            status_info.get("parent_name")
+                            if status_info
+                            else None
+                        )
                     actual_year = service._candidate_year(
                         standard,
                         row["sdo_name"],
@@ -766,6 +788,38 @@ def assemble_results(
                         )
                     ),
                     "standard": data if is_match else None,
+                    # Keep the catalogue subscription flag even when the row
+                    # is unmatched (withdrawn/internal), so Excel can report
+                    # Standards-e-Pedia availability accurately. Prefer master
+                    # enrichment because legacy search rows omit this column.
+                    "bsb_subscription": service._subscription_flag_value(
+                        data if isinstance(data, dict) else None,
+                        standard,
+                    ),
+                    "parent_status": (
+                        (
+                            data.get("parent_status")
+                            if isinstance(data, dict)
+                            else None
+                        )
+                        or (
+                            status_info.get("parent_name")
+                            if status_info
+                            else None
+                        )
+                    ),
+                    "catalog_status": (
+                        (
+                            data.get("catalog_status")
+                            if isinstance(data, dict)
+                            else None
+                        )
+                        or (
+                            status_info.get("name")
+                            if status_info
+                            else None
+                        )
+                    ),
                     "actions": {},
                     "_source_request_identity": row.get(
                         "source_request_identity"
@@ -810,6 +864,9 @@ def assemble_results(
             "replacement_standard": row.get("stated_replacement"),
             "superseded_by": None,
             "standard": None,
+            "bsb_subscription": 0,
+            "parent_status": None,
+            "catalog_status": None,
             "actions": {"manual_search": True},
             "_source_request_identity": row.get(
                 "source_request_identity"
