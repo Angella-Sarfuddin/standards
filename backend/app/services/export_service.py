@@ -909,7 +909,10 @@ class ExportService:
 
     @staticmethod
     def _request_looks_like_series(result):
-        """True when the request is a series root (SER/SERIES), not one edition."""
+        """True for series/part-range roots, not a single edition request.
+
+        Covers ``SER``/``SERIES`` and part ranges such as ``(Pt 1-30)``.
+        """
         if not result:
             return False
         requested_sdo = str(result.get("requested_sdo") or "").strip()
@@ -917,11 +920,21 @@ class ExportService:
         if not requested_sdo and not requested_standard:
             return False
         identity = parse_identity(requested_sdo, requested_standard)
-        return identity.get("qualifier") == "SERIES"
+        qualifier = str(identity.get("qualifier") or "")
+        if qualifier == "SERIES":
+            return True
+        # ``IEC 60034 (Pt 1-30)`` expands into many distinct parts; that is a
+        # family request, not repeated asks for one catalogue row.
+        if identity.get("family_lookup") and re.fullmatch(
+            r"PART:\d+-\d+",
+            qualifier,
+        ):
+            return True
+        return False
 
     @staticmethod
     def _is_series_expansion_group(results, members):
-        """One series request expanded into multiple distinct matched parts."""
+        """One series/part-range request expanded into multiple matched parts."""
         results = list(results or [])
         members = list(members or [])
         if len(members) < 2:
@@ -947,8 +960,8 @@ class ExportService:
     def _unique_export_results(results):
         """Keep the first row from each duplicate identity group.
 
-        Series expansions keep every matched part: one SER request is not a
-        duplicate set of the same standard.
+        Series and part-range expansions keep every matched part: one
+        ``SER`` / ``Pt 1-30`` request is not a duplicate set.
         """
         results = list(results or [])
         if not results:

@@ -71,7 +71,14 @@ def assemble_results(
         )
 
     def _candidate_serves_request(row, standard):
-        if getattr(standard, "sdo_id", None) == row["sdo_id"]:
+        candidate_sdo_id = getattr(standard, "sdo_id", None)
+        if candidate_sdo_id == row["sdo_id"]:
+            return True
+        alternate = row.get("publisher_dual_alternate") or {}
+        if (
+            alternate.get("sdo_id") is not None
+            and candidate_sdo_id == alternate.get("sdo_id")
+        ):
             return True
         requested_sdo = str(
             row.get("search_sdo_name") or row.get("sdo_name") or ""

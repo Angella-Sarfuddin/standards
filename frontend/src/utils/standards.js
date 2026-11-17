@@ -106,8 +106,27 @@ const committeeDisplayCodes = (code, description, ownerSdo) => {
     return description?.trim() ? [description.trim()] : [];
   }
   if (owner === "AMPP-NACE" || owner === "NACE") {
+    const scLabels = uniqueLabels(
+      [...text.matchAll(/(?<![A-Z0-9])SC\s*0*(\d+[A-Z]?)(?![A-Z0-9])/gi)].map(
+        (match) => {
+          const number = match[1];
+          const suffix = /^\d+$/.test(number)
+            ? number.padStart(2, "0")
+            : number.toUpperCase();
+          return `SC ${suffix}`;
+        }
+      )
+    );
+    if (scLabels.length) {
+      return scLabels;
+    }
     const numericCode = String(code || "").match(/(?<!\d)\d+(?:\.\d+)*(?!\d)/);
-    return numericCode ? [numericCode[0]] : [];
+    if (!numericCode) {
+      return [];
+    }
+    const number = numericCode[0];
+    const suffix = /^\d+$/.test(number) ? number.padStart(2, "0") : number;
+    return [`SC ${suffix}`];
   }
   if (owner === "ISO") {
     const explicit = [

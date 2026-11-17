@@ -70,8 +70,24 @@ def committee_display_codes(code, description, owner_sdo):
     if owner == "API":
         return [str(description or "").strip()] if str(description or "").strip() else []
     if owner in {"AMPP-NACE", "NACE"}:
+        # Catalogue descriptions look like "Asset Integrity Management (SC 10)".
+        # Show only the SC codes (all of them when several appear).
+        sc_labels = _unique_labels(
+            f"SC {(number.zfill(2) if number.isdigit() else number.upper())}"
+            for number in re.findall(
+                r"(?i)(?<![A-Z0-9])SC\s*0*(\d+[A-Z]?)(?![A-Z0-9])",
+                text,
+            )
+        )
+        if sc_labels:
+            return sc_labels
         numeric_code = re.search(r"(?<!\d)\d+(?:\.\d+)*(?!\d)", str(code or ""))
-        return [numeric_code.group(0)] if numeric_code else []
+        if not numeric_code:
+            return []
+        number = numeric_code.group(0)
+        if number.isdigit():
+            number = number.zfill(2)
+        return [f"SC {number}"]
     if owner == "ISO":
         explicit = [
             _normalize_tc_path(match)
@@ -1013,7 +1029,7 @@ def build_enrichment_map(
                     }
                 )
             classifications_for_standard = ieee_classifications
-        if sdo_title in {"astm", "bis", "bsi", "iec"}:
+        if sdo_title in {"astm", "bis", "bsi", "iec", "nace", "ampp-nace"}:
             classifications_for_standard = _code_only_committee_rows(
                 classifications_for_standard,
                 sdo_title,

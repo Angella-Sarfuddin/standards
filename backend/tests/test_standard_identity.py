@@ -19,6 +19,8 @@ from app.core.standard_identity import (
     identity_matches,
     identity_unprefixed_like_patterns,
     parse_identity,
+    prefer_publisher_dual_designation,
+    split_publisher_dual_designation,
 )
 
 
@@ -173,6 +175,40 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertIn("IEC PAS 60909%", patterns)
         self.assertIn("IEC GUIDE 60909%", patterns)
         self.assertIn("IEC/TR 60909%", patterns)
+
+    def test_publication_type_sdo_column_maps_to_designation(self):
+        cases = (
+            ("IEC/TR", "62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TS", "62263", "IEC", "TS 62263", "TS", "62263"),
+            ("ISO/TR", "16949", "ISO", "TR 16949", "TR", "16949"),
+            ("ISO/TS", "16949", "ISO", "TS 16949", "TS", "16949"),
+            ("IEC TR", "62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TR", "TR 62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TR", "IEC/TR 62263", "IEC", "TR 62263", "TR", "62263"),
+        )
+        for (
+            sdo_column,
+            number,
+            expected_sdo,
+            expected_display,
+            expected_designation,
+            expected_core,
+        ) in cases:
+            sdo, display, id_name = canonicalize_search_request(
+                sdo_column,
+                number,
+            )
+            self.assertEqual(sdo, expected_sdo)
+            self.assertEqual(display, expected_display)
+            self.assertEqual(id_name, expected_sdo)
+            identity = parse_identity(sdo, display)
+            self.assertEqual(identity["designation"], expected_designation)
+            self.assertEqual(identity["core_number"], expected_core)
+        identity = parse_identity(
+            *canonicalize_search_request("IEC/TR", "62263")[:2]
+        )
+        catalogue = parse_identity("IEC", "IEC TR 62263:2024")
+        self.assertTrue(identity_matches(identity, catalogue, check_year=False))
 
     def test_header_label_does_not_override_sdo_in_standard_value(self):
         self.assertEqual(
@@ -1248,6 +1284,38 @@ class StandardIdentityTests(unittest.TestCase):
                 "ASME B36.19 : 2022",
             )
         )
+
+    def test_publisher_dual_designation_keeps_requested_or_leading_side(self):
+        dual = "62443-3-2 / ANSI/ISA-62443-3-2"
+        self.assertEqual(
+            prefer_publisher_dual_designation("IEC", dual),
+            "62443-3-2",
+        )
+        self.assertEqual(
+            prefer_publisher_dual_designation("ISA", dual),
+            "62443-3-2",
+        )
+        swapped = "ANSI/ISA-62443-3-2 / IEC 62443-3-2"
+        self.assertEqual(
+            prefer_publisher_dual_designation("IEC", swapped),
+            "62443-3-2",
+        )
+        self.assertIsNone(
+            split_publisher_dual_designation("ASME", "B36.19M/36.19")
+        )
+        identity = parse_identity("IEC", dual)
+        self.assertEqual(identity["core_number"], "62443PART3")
+        self.assertEqual(identity["qualifier"], "SECTION:2")
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                dual,
+                "IEC 62443-3-2:2020",
+            )
+        )
+        sdo, number, _ = canonicalize_search_request("IEC", dual)
+        self.assertEqual(sdo, "IEC")
+        self.assertEqual(number, "62443-3-2")
 
     def test_row_needs_identity_discovery_skips_strong_local_matches(self):
         row = {

@@ -20,6 +20,9 @@ from app.services.document_search.result_assembly import (
 from app.services.document_search.enrichment_builder import (
     committee_display_codes,
 )
+from app.services.document_search.selection_context import (
+    use_candidate_status_map,
+)
 from app.services.document_search_service import DocumentSearchService
 from app.services.export_service import ExportService
 
@@ -504,6 +507,75 @@ class NotFoundLifecycleStatusTests(unittest.TestCase):
             {3: {"name": "WITHDRAWN", "cart_show": 0, "std_show": 0}},
         )
         self.assertEqual(row["requested_edition_status"], "WITHDRAWN")
+
+    def test_active_internal_only_duplicate_does_not_hide_historical(self):
+        """Boss Active + internal-only must not block Historical for bare requests."""
+        row = {
+            "sdo_name": "BSI",
+            "search_sdo_name": "BSI",
+            "requested_sdo_name": "BS",
+            "identity": parse_identity("BSI", "BS 6700"),
+        }
+        historical = SimpleNamespace(
+            id="BSI30188215",
+            status_id=3,
+            sdo_id=10,
+            standardno="BS 6700+A1",
+            display_stdNo="BS 6700:2006+A1:2009",
+            standardyear=2006,
+            BSBInternal=1,
+            BSBESales=0,
+            BSBSubscription=1,
+            DocumentAvailability=1,
+        )
+        boss_active_internal = SimpleNamespace(
+            id="BSI-Boss-165099",
+            status_id=1,
+            sdo_id=10,
+            standardno="BS 6700",
+            display_stdNo="BS 6700 : 2006",
+            standardyear=2006,
+            BSBInternal=1,
+            BSBESales=0,
+            BSBSubscription=0,
+            DocumentAvailability=0,
+        )
+        status_map = {
+            1: {"name": "Active", "cart_show": 1, "std_show": 1},
+            3: {"name": "Historical", "cart_show": 0, "std_show": 0},
+        }
+        self.assertFalse(
+            DocumentSearchService._candidate_catalog_visibility(
+                boss_active_internal,
+                status_map,
+            )
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [boss_active_internal, historical],
+            row,
+            status_map,
+        )
+        self.assertEqual(row["requested_edition_status"], "HISTORICAL")
+        preferred = DocumentSearchService._prefer_catalog_visible_candidates(
+            [boss_active_internal, historical],
+            status_map,
+            row,
+        )
+        self.assertTrue(any(c is historical for c in preferred))
+        with use_candidate_status_map(status_map):
+            selected = DocumentSearchService._select_master_candidates(
+                [boss_active_internal, historical],
+                row,
+            )
+        self.assertEqual(len(selected), 1)
+        self.assertIs(selected[0], historical)
+        self.assertEqual(
+            DocumentSearchService._master_result_status(
+                status_map[3],
+                selected[0],
+            ),
+            ("HISTORICAL", False),
+        )
 
 
 class StandardsEPediaExportTests(unittest.TestCase):
@@ -1053,6 +1125,25 @@ class DuplicateExportSheetTests(unittest.TestCase):
         unique = ExportService._unique_export_results(results)
         self.assertEqual(len(unique), 4)
 
+    def test_part_range_expansion_is_not_listed_as_duplicates(self):
+        results = [
+            self._found(
+                "IEC 60034 (Pt 1-30)",
+                f"IEC 60034-{part}:2020 (EN-FR)",
+                year=2020,
+                sdo="IEC",
+                standard_id=f"IEC-60034-{part}",
+            )
+            for part in (1, 2, 3, 11, 12, 30)
+        ]
+        self.assertTrue(
+            ExportService._request_looks_like_series(results[0])
+        )
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(dup_rows, [])
+        unique = ExportService._unique_export_results(results)
+        self.assertEqual(len(unique), 6)
+
     def test_unique_found_standards_do_not_fill_duplicates_sheet(self):
         results = [
             self._found(
@@ -1178,7 +1269,23 @@ class CommitteeCodeDisplayTests(unittest.TestCase):
                 "Pipelines & Tanks (SC 15)",
                 "AMPP-NACE",
             ),
-            ["15"],
+            ["SC 15"],
+        )
+        self.assertEqual(
+            committee_display_codes(
+                "10",
+                "Asset Integrity Management (SC 10)",
+                "NACE",
+            ),
+            ["SC 10"],
+        )
+        self.assertEqual(
+            committee_display_codes(
+                "",
+                "Asset Integrity Management (SC 10) (SC 11)",
+                "NACE",
+            ),
+            ["SC 10", "SC 11"],
         )
 
 

@@ -130,6 +130,14 @@ def build_identity_candidate_index(candidates, rows):
             ).add(sdo_name)
             if ieee_iec_joint_request(sdo_name):
                 joint_request_names.add(sdo_name)
+        alternate = row.get("publisher_dual_alternate") or {}
+        alt_sdo_id = alternate.get("sdo_id")
+        alt_sdo_name = alternate.get("sdo_name")
+        if alt_sdo_id and alt_sdo_name:
+            sdo_names_by_id.setdefault(
+                alt_sdo_id,
+                set(),
+            ).add(alt_sdo_name)
 
     index = {}
     parsed_identities = {}

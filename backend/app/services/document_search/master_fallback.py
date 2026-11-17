@@ -73,6 +73,14 @@ def find_master_matches(
                         variant,
                     )
                 )
+        alternate = row.get("publisher_dual_alternate") or {}
+        alt_sdo_id = alternate.get("sdo_id")
+        if alt_sdo_id:
+            for variant in (alternate.get("identity") or {}).get(
+                "variants",
+                [],
+            ):
+                pairs.append((alt_sdo_id, variant))
 
     pairs = list(
         dict.fromkeys(pairs)
@@ -98,10 +106,14 @@ def find_master_matches(
     standard_pairs = list(pairs)
     for row in unresolved_rows:
         full = row.get("full_display_number")
-        if not full:
-            continue
-        for search_sdo_id in _row_search_sdo_ids(enrichment_repository, row):
-            standard_pairs.append((search_sdo_id, full))
+        if full:
+            for search_sdo_id in _row_search_sdo_ids(enrichment_repository, row):
+                standard_pairs.append((search_sdo_id, full))
+        alternate = row.get("publisher_dual_alternate") or {}
+        alt_sdo_id = alternate.get("sdo_id")
+        alt_display = alternate.get("displaystdno")
+        if alt_sdo_id and alt_display:
+            standard_pairs.append((alt_sdo_id, alt_display))
 
     standard_pairs = list(dict.fromkeys(standard_pairs))
 
@@ -306,18 +318,19 @@ def find_master_matches(
     grouped = {}
 
     for master in masters:
-
-        key = (
-            master.sdo_id,
-            normalize_tokens(
-                master.display_stdNo or ""
-            ),
-        )
-
-        grouped.setdefault(
-            key,
-            [],
-        ).append(master)
+        for value in (
+            master.display_stdNo or "",
+            master.standardno or "",
+        ):
+            if not str(value).strip():
+                continue
+            grouped.setdefault(
+                (
+                    master.sdo_id,
+                    normalize_tokens(value),
+                ),
+                [],
+            ).append(master)
 
     # --------------------------------------------------------
     # Select master for each unresolved row
@@ -390,6 +403,22 @@ def find_master_matches(
                         [],
                     )
                 )
+        alternate = row.get("publisher_dual_alternate") or {}
+        alt_sdo_id = alternate.get("sdo_id")
+        if alt_sdo_id:
+            for variant in (alternate.get("identity") or {}).get(
+                "variants",
+                [],
+            ):
+                candidates.extend(
+                    grouped.get(
+                        (
+                            alt_sdo_id,
+                            normalize_tokens(variant),
+                        ),
+                        [],
+                    )
+                )
 
         # ----------------------------------------------------
         # Designation-neutral candidates
@@ -413,13 +442,44 @@ def find_master_matches(
             ) or [normalize_identity_core(core)]
 
             seen_master_ids = set()
-            for search_sdo_id in search_sdo_ids:
+            index_lookups = [
+                (search_sdo_id, request_sdo_name)
+                for search_sdo_id in search_sdo_ids
+            ]
+            if alt_sdo_id:
+                alt_sdo_name = normalize_tokens(
+                    alternate.get("sdo_name") or ""
+                )
+                index_lookups.append((alt_sdo_id, alt_sdo_name))
+                alt_core = (alternate.get("identity") or {}).get(
+                    "core_number"
+                )
+                if alt_core:
+                    lookup_cores = list(
+                        dict.fromkeys(
+                            [
+                                *lookup_cores,
+                                *(
+                                    identity_index_cores(
+                                        alternate.get("sdo_name") or "",
+                                        alt_core,
+                                        (alternate.get("identity") or {}).get(
+                                            "core_number_pattern"
+                                        )
+                                        or "",
+                                    )
+                                    or [normalize_identity_core(alt_core)]
+                                ),
+                            ]
+                        )
+                    )
+            for search_sdo_id, index_sdo_name in index_lookups:
                 for lookup_core in lookup_cores:
                     possible_masters = (
                         master_identity_index.get(
                             (
                                 search_sdo_id,
-                                request_sdo_name,
+                                index_sdo_name,
                                 lookup_core,
                             ),
                             {},

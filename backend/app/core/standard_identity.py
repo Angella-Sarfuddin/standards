@@ -476,6 +476,40 @@ _OPTIONAL_PUBLICATION_TYPE_SDOS = frozenset(
         "EN",
     }
 )
+# Excel SDO column values such as ``IEC/TR`` or ``ISO/TS`` mean publisher +
+# publication type, not a separate catalogue owner.
+_PUBLICATION_TYPE_COLUMN_RE = re.compile(
+    r"(?i)^(IEC|ISO|CEN|CENELEC|CLC)"
+    r"(?:\s*[/-]\s*|\s+)"
+    r"(TR|TS|PAS|GUIDE)$"
+)
+
+
+def _normalize_publication_type_column_sdo(
+    sdo_name: str,
+    display_number: str,
+) -> Optional[Tuple[str, str, str]]:
+    """Map ``IEC/TR`` + ``62263`` to identity SDO ``IEC`` and ``TR 62263``."""
+    match = _PUBLICATION_TYPE_COLUMN_RE.fullmatch(str(sdo_name or "").strip())
+    if not match:
+        return None
+    publisher = match.group(1).upper()
+    marker = match.group(2).upper()
+    body = clean(display_number)
+    body = re.sub(
+        rf"(?i)^(?:{re.escape(publisher)}\s*)?[/-]?\s*{re.escape(marker)}\s*[/-]?\s*",
+        "",
+        body,
+    ).strip(" -/:")
+    body = re.sub(
+        rf"(?i)^{re.escape(publisher)}\s*[/-]?\s*",
+        "",
+        body,
+        count=1,
+    ).strip(" -/:")
+    if not body:
+        return None
+    return publisher, f"{marker} {body}".strip(), publisher
 
 SDO_IDENTIFIER_PREFIX_ALIASES = {
     "ISO": ("ISO/IEC", "ISO/TS", "ISO/TR"),
@@ -1847,6 +1881,9 @@ def canonicalize_search_request(
     sdo, joint_prefix = _normalize_bis_joint_sdo(sdo_name)
     display = _prepare_printed_designation(clean(display_number), sdo=sdo)
     display = _normalize_bis_joint_display(display)
+    # ``62443-3-2 / ANSI/ISA-62443-3-2`` is one document under two publishers.
+    # Keep the side that matches the requested SDO (or the leading side).
+    display = prefer_publisher_dual_designation(sdo, display)
     if joint_prefix and not re.match(
         rf"(?i)^{re.escape(joint_prefix)}(?=$|[\s:/.-]|\d)",
         display,
@@ -2001,6 +2038,13 @@ def canonicalize_search_request(
         display = f"DIN {display}"
     id_name = sdo
 
+    publication_type_column = _normalize_publication_type_column_sdo(
+        sdo,
+        display,
+    )
+    if publication_type_column:
+        sdo, display, id_name = publication_type_column
+
     alias = SDO_LOOKUP_ALIASES.get(sdo)
     if alias:
         alias_key = sdo
@@ -2120,6 +2164,142 @@ def designation_cites_nace_number(value: str, number: str) -> bool:
         rf"(?i)\bNACE\s+NO\.?\s*{int(number)}\b",
         str(value or ""),
     ))
+
+
+_PUBLISHER_DUAL_SDOS = (
+    "ISA",
+    "IEC",
+    "ISO",
+    "IEEE",
+    "UL",
+    "API",
+    "ASTM",
+    "ASME",
+    "NACE",
+    "MSS",
+    "NEMA",
+    "BSI",
+    "EN",
+    "SAE",
+    "HI",
+    "ACI",
+)
+# When one side is a bare number, try the usual twin publisher.
+_PUBLISHER_DUAL_COUNTERPARTS = {
+    "ISA": ("IEC",),
+    "IEC": ("ISA",),
+    "IEEE": ("IEC",),
+    "NACE": ("SSPC",),
+    "SSPC": ("NACE",),
+}
+_PUBLISHER_DUAL_RE = re.compile(
+    # Left must end with a digit so ``ANSI/ISA-...`` is not split on the
+    # inner ANSI/ISA slash. Metric pairs like ``B36.19M/36.19`` stay intact
+    # because the right side is not a publisher name.
+    r"(?is)^(?P<left>.+?\d)\s*/\s*(?P<right>(?:ANSI\s*[/-]\s*)?(?:"
+    + "|".join(re.escape(sdo) for sdo in sorted(_PUBLISHER_DUAL_SDOS, key=len, reverse=True))
+    + r")\b.*)$"
+)
+
+
+def _publisher_prefix_of(text: str) -> Optional[str]:
+    value = str(text or "").strip()
+    if re.match(r"(?i)^ANSI\s*[/-]\s*ISA\b", value):
+        return "ISA"
+    for publisher in sorted(_PUBLISHER_DUAL_SDOS, key=len, reverse=True):
+        if re.match(rf"(?i)^{re.escape(publisher)}\b", value):
+            return publisher
+    return None
+
+
+def _strip_leading_publisher(text: str) -> str:
+    value = str(text or "").strip()
+    value = re.sub(r"(?i)^ANSI\s*[/-]\s*", "", value).strip()
+    return re.sub(
+        rf"(?i)^(?:{'|'.join(re.escape(sdo) for sdo in sorted(_PUBLISHER_DUAL_SDOS, key=len, reverse=True))})"
+        r"\s*[/-]?\s*",
+        "",
+        value,
+        count=1,
+    ).strip(" -/:")
+
+
+def split_publisher_dual_designation(
+    sdo_name: str,
+    display_number: str,
+) -> Optional[Dict]:
+    """Split ``62443-3-2 / ANSI/ISA-62443-3-2`` into preferred + alternate sides.
+
+    Metric pairs such as ``B36.19M/36.19`` are left alone because the right
+    side is not a publisher designation.
+    """
+    text = clean(display_number)
+    match = _PUBLISHER_DUAL_RE.match(text)
+    if not match:
+        return None
+    left = match.group("left").strip()
+    right = match.group("right").strip()
+    if not left or not right:
+        return None
+    left_publisher = _publisher_prefix_of(left)
+    right_publisher = _publisher_prefix_of(right)
+    if not right_publisher:
+        return None
+    left_body = _strip_leading_publisher(left) if left_publisher else left
+    right_body = _strip_leading_publisher(right)
+    if not left_body or not right_body:
+        return None
+
+    requested = normalize_tokens(sdo_name)
+    if requested in {"AMPPNACE", "ANSINACE"}:
+        requested = "NACE"
+    if requested in {"ANSIISA", "ISA"}:
+        requested = "ISA"
+
+    prefer_right = right_publisher and requested == normalize_tokens(
+        right_publisher
+    )
+    prefer_left = left_publisher and requested == normalize_tokens(
+        left_publisher
+    )
+    def _alternate_for_bare_left(known_publisher: str) -> str:
+        counterparts = _PUBLISHER_DUAL_COUNTERPARTS.get(known_publisher, ())
+        for counterpart in counterparts:
+            if normalize_tokens(counterpart) != requested:
+                return counterpart
+        return counterparts[0] if counterparts else (sdo_name or known_publisher)
+
+    if prefer_right and not prefer_left:
+        chosen_sdo, chosen_body = right_publisher, right_body
+        alternate_sdo = left_publisher or _alternate_for_bare_left(right_publisher)
+        alternate_body = left_body
+        leading_chosen = False
+    elif prefer_left:
+        chosen_sdo, chosen_body = left_publisher, left_body
+        alternate_sdo, alternate_body = right_publisher, right_body
+        leading_chosen = True
+    else:
+        # Leading designation wins when the sheet SDO does not name a side.
+        chosen_sdo = left_publisher or sdo_name
+        chosen_body = left_body
+        alternate_sdo, alternate_body = right_publisher, right_body
+        leading_chosen = True
+
+    return {
+        "chosen_sdo": chosen_sdo,
+        "chosen_display": chosen_body,
+        "alternate_sdo": alternate_sdo,
+        "alternate_display": alternate_body,
+        "leading_chosen": leading_chosen,
+    }
+
+
+def prefer_publisher_dual_designation(sdo_name: str, display_number: str) -> str:
+    """Keep the searchable side of a dual-publisher designation string."""
+    dual = split_publisher_dual_designation(sdo_name, display_number)
+    if not dual:
+        return display_number
+    return dual["chosen_display"]
 
 
 def designation_is_ieee_iec_dual_logo(*values: str) -> bool:
@@ -2409,6 +2589,9 @@ def parse_identity(sdo_name: str, display_number: str) -> Dict:
             "",
             body,
         ).strip(" -/")
+    # Dual-publisher catalogue aliases such as
+    # ``62443-3-2 / ANSI/ISA-62443-3-2`` must not be parsed as one core.
+    body = prefer_publisher_dual_designation(sdo, body)
 
     designation, core = _split_designation(body)
     core = VOLUME_SUFFIX_RE.sub("", core).rstrip(" -./")
