@@ -63,9 +63,13 @@ def _must_remain_unmatched(result):
     ):
         return True
     if re.search(
-        r"(?i)no database edition is available for requested year",
+        r"(?i)no database edition is available for requested year|"
+        r"available in older version|"
+        r"older version available",
         detail,
     ):
+        return True
+    if status == "older version available":
         return True
     return False
 
@@ -133,8 +137,11 @@ def deduplicate_results(results, service_class):
 
         if not result.get("matched"):
             result = dict(result)
+            current_status = str(result.get("status") or "").strip().upper()
             lifecycle_status = _normalize_unmatched_lifecycle_status(result)
-            if lifecycle_status:
+            if current_status == "OLDER VERSION AVAILABLE":
+                result["status"] = "OLDER VERSION AVAILABLE"
+            elif lifecycle_status:
                 # Keep withdrawn/historical visible in the Not Found list
                 # instead of collapsing every unmatched row to NOT FOUND.
                 result["status"] = lifecycle_status
@@ -148,7 +155,11 @@ def deduplicate_results(results, service_class):
                         "No available catalog record was found, and no "
                         "unavailable lifecycle status was identified."
                         if reason == "Not found in catalog"
-                        else f"The requested edition is {reason.casefold()}."
+                        else (
+                            str(result.get("status_detail") or "").strip()
+                            if reason == "Older version available"
+                            else f"The requested edition is {reason.casefold()}."
+                        )
                     )
                 )
         standard = result.get("standard") or {}
@@ -240,6 +251,12 @@ def not_found_reason(result):
         return "Withdrawn"
     if lifecycle == "HISTORICAL":
         return "Historical"
+    if status == "older version available" or re.search(
+        r"(?i)available in older version|"
+        r"no database edition is available for requested year",
+        detail,
+    ):
+        return "Older version available"
     if re.search(
         r"(?i)revision/amendment requests are excluded|standalone "
         r"(?:revision|amendment)",

@@ -521,35 +521,37 @@ class DocumentSearchServiceMethods:
         if DocumentSearchService._candidate_should_be_excluded(candidate):
             return False
 
-        requested = row[
-            "identity"
-        ]
+        identities = [row["identity"]]
+        alternate = row.get("publisher_dual_alternate") or {}
+        if alternate.get("identity"):
+            identities.append(alternate["identity"])
 
         candidate_values = [
             candidate.display_stdNo or "",
             candidate.standardno or "",
         ]
 
-        for value in candidate_values:
+        for requested in identities:
+            for value in candidate_values:
 
-            if not value:
-                continue
+                if not value:
+                    continue
 
-            candidate_identity = parse_identity(
-                requested[
-                    "sdo_name"
-                ],
-                value,
-            )
+                candidate_identity = parse_identity(
+                    requested[
+                        "sdo_name"
+                    ],
+                    value,
+                )
 
-            if not identity_matches(
-                requested,
-                candidate_identity,
-                check_year=False,
-            ):
-                continue
+                if not identity_matches(
+                    requested,
+                    candidate_identity,
+                    check_year=False,
+                ):
+                    continue
 
-            return True
+                return True
 
         return False
 
@@ -750,6 +752,9 @@ class DocumentSearchServiceMethods:
                 candidate,
                 row,
             )
+            # Internal-only Active duplicates are not current editions and
+            # must not supply (or block) WITHDRAWN/HISTORICAL reporting.
+            and not DocumentSearchService._is_bsb_internal_only(candidate)
         ]
         if requested_year is not None:
             exact_candidates = [
@@ -831,6 +836,11 @@ class DocumentSearchServiceMethods:
             )
         )
         if embedded_status:
+            return False
+        # An Active Boss/internal-only duplicate is not a usable current
+        # edition. Treating it as visible hides Historical/Withdrawn
+        # siblings and turns bare requests into NOT FOUND.
+        if DocumentSearchService._is_bsb_internal_only(candidate):
             return False
         if not status_map:
             return None

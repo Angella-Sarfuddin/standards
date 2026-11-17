@@ -7,7 +7,11 @@ logger = logging.getLogger(__name__)
 
 from app.services.document_search import identity_discovery
 from app.services.document_search.selection_context import use_candidate_status_map
-from app.core.standard_identity import normalize_identity_core, normalize_tokens
+from app.core.standard_identity import (
+    identity_index_cores,
+    normalize_identity_core,
+    normalize_tokens,
+)
 
 
 def match_local_standards(
@@ -165,38 +169,47 @@ def match_local_standards(
 
         if core:
 
-            normalized_core = normalize_identity_core(
-                core
+            search_sdo_name = (
+                row.get("search_sdo_name") or row["sdo_name"]
             )
+            # Metric duals such as ``B36.19M`` must also join the non-metric
+            # index key ``3619`` where ``B36.19`` was stored.
+            lookup_cores = identity_index_cores(
+                search_sdo_name,
+                core,
+                identity.get("core_number_pattern") or "",
+            ) or [normalize_identity_core(core)]
 
-            possible_identity_candidates = (
-                identity_candidate_index.get(
-                    (
-                        row["sdo_id"],
-                        normalize_tokens(
-                            row.get("search_sdo_name") or row["sdo_name"]
+            seen_candidate_ids = set()
+            for lookup_core in lookup_cores:
+                possible_identity_candidates = (
+                    identity_candidate_index.get(
+                        (
+                            row["sdo_id"],
+                            normalize_tokens(search_sdo_name),
+                            lookup_core,
                         ),
-                        normalized_core,
-                    ),
-                    {},
-                ).values()
-            )
+                        {},
+                    ).values()
+                )
 
-            for candidate in possible_identity_candidates:
+                for candidate in possible_identity_candidates:
+                    if (
+                        candidate.sdo_id
+                        != row["sdo_id"]
+                    ):
+                        continue
+                    if candidate.id in seen_candidate_ids:
+                        continue
 
-                if (
-                    candidate.sdo_id
-                    != row["sdo_id"]
-                ):
-                    continue
-
-                if (
-                    candidate_matches_identity(candidate, row)
-                    or candidate_is_part_of_root(candidate, row)
-                ):
-                    candidates.append(
-                        candidate
-                    )
+                    if (
+                        candidate_matches_identity(candidate, row)
+                        or candidate_is_part_of_root(candidate, row)
+                    ):
+                        seen_candidate_ids.add(candidate.id)
+                        candidates.append(
+                            candidate
+                        )
 
         candidates.extend(exact_candidates)
         candidates.extend(normalized_candidates)

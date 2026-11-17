@@ -306,35 +306,37 @@ def _candidate_matches_identity(
     row,
 ):
 
-    requested = row[
-        "identity"
-    ]
+    identities = [row["identity"]]
+    alternate = row.get("publisher_dual_alternate") or {}
+    if alternate.get("identity"):
+        identities.append(alternate["identity"])
 
     candidate_values = [
         candidate.display_stdNo or "",
         candidate.standardno or "",
     ]
 
-    for value in candidate_values:
+    for requested in identities:
+        for value in candidate_values:
 
-        if not value:
-            continue
+            if not value:
+                continue
 
-        candidate_identity = parse_identity(
-            requested[
-                "sdo_name"
-            ],
-            value,
-        )
+            candidate_identity = parse_identity(
+                requested[
+                    "sdo_name"
+                ],
+                value,
+            )
 
-        if not identity_matches(
-            requested,
-            candidate_identity,
-            check_year=False,
-        ):
-            continue
+            if not identity_matches(
+                requested,
+                candidate_identity,
+                check_year=False,
+            ):
+                continue
 
-        return True
+            return True
 
     return False
 

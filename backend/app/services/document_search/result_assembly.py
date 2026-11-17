@@ -71,7 +71,14 @@ def assemble_results(
         )
 
     def _candidate_serves_request(row, standard):
-        if getattr(standard, "sdo_id", None) == row["sdo_id"]:
+        candidate_sdo_id = getattr(standard, "sdo_id", None)
+        if candidate_sdo_id == row["sdo_id"]:
+            return True
+        alternate = row.get("publisher_dual_alternate") or {}
+        if (
+            alternate.get("sdo_id") is not None
+            and candidate_sdo_id == alternate.get("sdo_id")
+        ):
             return True
         requested_sdo = str(
             row.get("search_sdo_name") or row.get("sdo_name") or ""
@@ -577,16 +584,17 @@ def assemble_results(
                     and int(actual_year) < int(requested_year)
                 )
                 if is_match and requested_year_is_newer_than_database:
-                    # Never present an older database edition as a match
-                    # for a newer, explicitly requested edition.
+                    # Never present an older database edition as a Found match
+                    # for a newer, explicitly requested edition. Surface it as
+                    # an older-version notice instead.
                     is_match = False
-                    status = "NOT FOUND"
+                    status = "OLDER VERSION AVAILABLE"
 
                 status_detail = (
                     (
-                        f"No database edition is available for requested "
-                        f"year {requested_year}; latest available database "
-                        f"edition is {actual_year}."
+                        f"Requested year {requested_year} is not in the "
+                        f"catalogue; available in older version "
+                        f"{actual_year}."
                         if requested_year_is_newer_than_database
                         else f"Requested year {requested_year}; returned latest available edition {actual_year}."
                     )

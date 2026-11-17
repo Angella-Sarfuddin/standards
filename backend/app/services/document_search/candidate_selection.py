@@ -423,6 +423,7 @@ def _select_master_candidate(
     # IEEE and IEC dual-logo rows count as the same family for either
     # publisher request so the newer joint edition can win.
     search_sdo_name = row.get("search_sdo_name") or row["sdo_name"]
+    requested_sdo_id = row.get("sdo_id")
 
     def ranking(candidate):
         candidate_prefix = parse_identity(
@@ -434,7 +435,13 @@ def _select_master_candidate(
             == requested_prefix
             or ieee_iec_joint_prefix(search_sdo_name, candidate_prefix)
         )
+        # Dual-publisher asks prefer the sheet SDO when both twins exist.
+        exact_sdo = int(
+            requested_sdo_id is not None
+            and getattr(candidate, "sdo_id", None) == requested_sdo_id
+        )
         return (
+            exact_sdo,
             exact_prefix,
             service_class._candidate_year(candidate, search_sdo_name) or 0,
             service_class._candidate_reaffirmation_year(candidate),

@@ -11,8 +11,9 @@ def _candidate_revision_suffix(candidate):
         getattr(candidate, "display_stdNo", ""),
     ):
         match = re.search(
-            r"(?i)(?:/|\+|\s)\s*(?:CORR(?:IGENDUM)?\.?|COR\.?|AMD\.?|AMEND(?:MENT)?\.?)"
-            r"\s*(?:NO\.?\s*)?\d+[A-Z]?",
+            r"(?i)(?:/|\+|\s)\s*(?:CORR(?:IGENDUM)?\.?|COR\.?|AMD\.?|AMEND(?:MENT)?\.?"
+            r"|ERRATA|ADDEND(?:UM|A)?)"
+            r"\s*(?:NO\.?\s*)?\d*[A-Z]?",
             str(value or ""),
         )
         if match:
@@ -21,14 +22,18 @@ def _candidate_revision_suffix(candidate):
 
 
 def _candidate_is_amendment(candidate):
-    """Return whether the catalogue designation names an amendment."""
+    """Return whether the catalogue designation names an amendment/errata."""
     for value in (
         getattr(candidate, "display_stdNo", ""),
         getattr(candidate, "standardno", ""),
     ):
         if value and re.search(
             r"(?i)(?:^|[\s:/+,(\[])"
-            r"(?:AMEND(?:MENT)?|AMD)\s*[-.:#]?\s*(?:NO\.?\s*)?\d+\b",
+            r"(?:"
+            r"(?:AMEND(?:MENT)?|AMD)\s*[-.:#]?\s*(?:NO\.?\s*)?\d+\b"
+            r"|ERRATA\b"
+            r"|ADDEND(?:UM|A)?\b"
+            r")",
             str(value),
         ):
             return True
