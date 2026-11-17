@@ -695,11 +695,16 @@ class ExportService:
                 or ExportService._not_found_reason_fallback(result)
             )
             normalized_reason = str(reason or "").strip().casefold()
+            raw_status = str(result.get("status") or "").strip().upper()
             lifecycle_status = ExportService._not_found_lifecycle_status(
                 result,
                 reason,
             )
-            if lifecycle_status:
+            if raw_status == "OLDER VERSION AVAILABLE" or normalized_reason == (
+                "older version available"
+            ):
+                display_status = "OLDER VERSION AVAILABLE"
+            elif lifecycle_status:
                 display_status = lifecycle_status
             elif normalized_reason == "withdrawn":
                 display_status = "WITHDRAWN"
@@ -904,7 +909,10 @@ class ExportService:
 
     @staticmethod
     def _request_looks_like_series(result):
-        """True when the request is a series root (SER/SERIES), not one edition."""
+        """True for series/part-range roots, not a single edition request.
+
+        Covers ``SER``/``SERIES`` and part ranges such as ``(Pt 1-30)``.
+        """
         if not result:
             return False
         requested_sdo = str(result.get("requested_sdo") or "").strip()
@@ -912,11 +920,21 @@ class ExportService:
         if not requested_sdo and not requested_standard:
             return False
         identity = parse_identity(requested_sdo, requested_standard)
-        return identity.get("qualifier") == "SERIES"
+        qualifier = str(identity.get("qualifier") or "")
+        if qualifier == "SERIES":
+            return True
+        # ``IEC 60034 (Pt 1-30)`` expands into many distinct parts; that is a
+        # family request, not repeated asks for one catalogue row.
+        if identity.get("family_lookup") and re.fullmatch(
+            r"PART:\d+-\d+",
+            qualifier,
+        ):
+            return True
+        return False
 
     @staticmethod
     def _is_series_expansion_group(results, members):
-        """One series request expanded into multiple distinct matched parts."""
+        """One series/part-range request expanded into multiple matched parts."""
         results = list(results or [])
         members = list(members or [])
         if len(members) < 2:
@@ -942,8 +960,8 @@ class ExportService:
     def _unique_export_results(results):
         """Keep the first row from each duplicate identity group.
 
-        Series expansions keep every matched part: one SER request is not a
-        duplicate set of the same standard.
+        Series and part-range expansions keep every matched part: one
+        ``SER`` / ``Pt 1-30`` request is not a duplicate set.
         """
         results = list(results or [])
         if not results:
@@ -961,6 +979,9 @@ class ExportService:
     def _duplicate_status_label(result):
         if result.get("matched"):
             return str(result.get("status") or "AVAILABLE").strip() or "AVAILABLE"
+        raw_status = str(result.get("status") or "").strip().upper()
+        if raw_status == "OLDER VERSION AVAILABLE":
+            return "OLDER VERSION AVAILABLE"
         reason = (
             result.get("not_found_reason")
             or ExportService._not_found_reason_fallback(result)
@@ -972,6 +993,8 @@ class ExportService:
         if lifecycle_status:
             return lifecycle_status
         normalized_reason = str(reason or "").strip().casefold()
+        if normalized_reason == "older version available":
+            return "OLDER VERSION AVAILABLE"
         if normalized_reason == "withdrawn":
             return "WITHDRAWN"
         if normalized_reason == "historical":
@@ -1220,6 +1243,12 @@ class ExportService:
                 result.get("status_detail"),
             )
         ).casefold()
+        if (
+            "older version available" in evidence
+            or "available in older version" in evidence
+            or "no database edition is available for requested year" in evidence
+        ):
+            return "Older version available"
         if "sdo not found" in evidence:
             return "SDO not found"
         return "Not found in catalog"

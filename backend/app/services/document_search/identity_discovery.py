@@ -73,11 +73,13 @@ def discover_identity_candidates(identity_lookup_rows, repository):
 
     for row in identity_lookup_rows:
         identity = row["identity"]
+        # Keep slash duals such as ``B36.19M/36.19`` intact so lookup-token
+        # expansion can search both sides and the non-metric form.
         core = (
             identity.get("core_number_pattern")
             or identity.get("core_number")
             or ""
-        ).split("/", 1)[0]
+        )
 
         if not core:
             continue
@@ -128,6 +130,14 @@ def build_identity_candidate_index(candidates, rows):
             ).add(sdo_name)
             if ieee_iec_joint_request(sdo_name):
                 joint_request_names.add(sdo_name)
+        alternate = row.get("publisher_dual_alternate") or {}
+        alt_sdo_id = alternate.get("sdo_id")
+        alt_sdo_name = alternate.get("sdo_name")
+        if alt_sdo_id and alt_sdo_name:
+            sdo_names_by_id.setdefault(
+                alt_sdo_id,
+                set(),
+            ).add(alt_sdo_name)
 
     index = {}
     parsed_identities = {}
