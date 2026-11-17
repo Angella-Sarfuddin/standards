@@ -3,6 +3,7 @@
 import re
 
 from app.core.standard_identity import (
+    ieee_iec_joint_prefix,
     normalize_identity_core,
     parse_identity,
     standard_number_year,
@@ -170,12 +171,19 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
     )
     if not candidates:
         return []
-    selected = service_class._select_candidate(
-        candidates,
-        row,
+    selected = None
+    api_family_request = (
+        service_class._is_api_request(row)
+        and not row["identity"].get("qualifier")
+        and not row["identity"].get("family_lookup")
     )
+    if not api_family_request:
+        selected = service_class._select_candidate(
+            candidates,
+            row,
+        )
 
-    if not service_class._is_bare_qualifier_request(row):
+    if not service_class._is_bare_qualifier_request(row) and not api_family_request:
         if selected:
             return [selected]
 
@@ -278,11 +286,14 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
             )
             or 0
         )
+        candidate_prefix = candidate_identity.get("identifier_prefix") or ""
         exact_prefix = int(
-            service_class._normalized_identifier_prefix(
-                candidate_identity.get("identifier_prefix") or ""
-            )
+            service_class._normalized_identifier_prefix(candidate_prefix)
             == requested_prefix
+            or ieee_iec_joint_prefix(
+                row.get("search_sdo_name") or row.get("sdo_name"),
+                candidate_prefix,
+            )
         )
         # A later reaffirmation of the same edition outranks an older
         # one. Publication year still decides before that review year.
@@ -409,27 +420,36 @@ def _select_master_candidate(
     # Preserve an explicit designation family (such as IS/IEC) before
     # choosing the newest year. Different catalogue prefixes can share
     # the same numeric core and part while representing different series.
-    return max(
-        candidates,
-        key=lambda candidate: (
-            int(
-                service_class._normalized_identifier_prefix(
-                    parse_identity(
-                        row.get("search_sdo_name") or row["sdo_name"],
-                        candidate.display_stdNo or candidate.standardno or "",
-                    ).get("identifier_prefix") or ""
-                ) == requested_prefix
-            ),
-            service_class._candidate_year(
-                candidate,
-                row.get("search_sdo_name") or row["sdo_name"],
-            ) or 0,
+    # IEEE and IEC dual-logo rows count as the same family for either
+    # publisher request so the newer joint edition can win.
+    search_sdo_name = row.get("search_sdo_name") or row["sdo_name"]
+    requested_sdo_id = row.get("sdo_id")
+
+    def ranking(candidate):
+        candidate_prefix = parse_identity(
+            search_sdo_name,
+            candidate.display_stdNo or candidate.standardno or "",
+        ).get("identifier_prefix") or ""
+        exact_prefix = int(
+            service_class._normalized_identifier_prefix(candidate_prefix)
+            == requested_prefix
+            or ieee_iec_joint_prefix(search_sdo_name, candidate_prefix)
+        )
+        # Dual-publisher asks prefer the sheet SDO when both twins exist.
+        exact_sdo = int(
+            requested_sdo_id is not None
+            and getattr(candidate, "sdo_id", None) == requested_sdo_id
+        )
+        return (
+            exact_sdo,
+            exact_prefix,
+            service_class._candidate_year(candidate, search_sdo_name) or 0,
             service_class._candidate_reaffirmation_year(candidate),
             int(getattr(candidate, "DocumentAvailability", 1) == 1),
             int(getattr(candidate, "recent", 0) == 1),
-        ),
-        default=None,
-    )
+        )
+
+    return max(candidates, key=ranking, default=None)
 
 def _select_master_candidates(candidates, row, status_map=None, *, service_class):
     service_class._record_requested_edition_status(
@@ -611,11 +631,14 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
             candidate.standardno
         ) or 0
         reaffirmed = service_class._candidate_reaffirmation_year(candidate)
+        candidate_prefix = candidate_identity.get("identifier_prefix") or ""
         exact_prefix = int(
-            service_class._normalized_identifier_prefix(
-                candidate_identity.get("identifier_prefix") or ""
-            )
+            service_class._normalized_identifier_prefix(candidate_prefix)
             == requested_prefix
+            or ieee_iec_joint_prefix(
+                row.get("search_sdo_name") or row.get("sdo_name"),
+                candidate_prefix,
+            )
         )
         # API catalogue rows can use a different prefix for a newer
         # edition (for example API versus ANSI/API). Let the year decide

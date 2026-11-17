@@ -31,6 +31,13 @@ def candidate_has_database_document(candidate, enrichment_map):
     )
 
 
+def _requested_edition_year(row):
+    identity = row.get("identity") or {}
+    if identity.get("qualifier") == "SERIES":
+        return None
+    return identity.get("year")
+
+
 def assemble_results(
     service,
     started,
@@ -64,7 +71,28 @@ def assemble_results(
         )
 
     def _candidate_serves_request(row, standard):
-        if getattr(standard, "sdo_id", None) == row["sdo_id"]:
+        candidate_sdo_id = getattr(standard, "sdo_id", None)
+        if candidate_sdo_id == row["sdo_id"]:
+            return True
+        alternate = row.get("publisher_dual_alternate") or {}
+        if (
+            alternate.get("sdo_id") is not None
+            and candidate_sdo_id == alternate.get("sdo_id")
+        ):
+            return True
+        requested_sdo = str(
+            row.get("search_sdo_name") or row.get("sdo_name") or ""
+        ).strip().upper()
+        candidate_number = " ".join(
+            str(value or "")
+            for value in (
+                getattr(standard, "display_stdNo", ""),
+                getattr(standard, "standardno", ""),
+            )
+        ).replace(" ", "").upper()
+        if requested_sdo in {"IEEE", "IEC"} and (
+            "IEC/IEEE" in candidate_number or "IEEE/IEC" in candidate_number
+        ):
             return True
         nace_number = _row_nace_number(row)
         return bool(
@@ -183,6 +211,9 @@ def assemble_results(
                     "standard matching."
                 ),
                 "standard": None,
+                "bsb_subscription": 0,
+                "parent_status": None,
+                "catalog_status": None,
                 "actions": {"manual_search": True},
                 "_source_request_identity": row.get(
                     "source_request_identity"
@@ -222,6 +253,9 @@ def assemble_results(
                 "matched": False,
                 "status": "SDO NOT FOUND",
                 "standard": None,
+                "bsb_subscription": 0,
+                "parent_status": None,
+                "catalog_status": None,
                 "actions": {"manual_search": True},
                 "_source_request_identity": row.get(
                     "source_request_identity"
@@ -323,6 +357,26 @@ def assemble_results(
                 status_map,
             )
 
+        if (
+            row.get("expand_family")
+            and service._is_api_request(row)
+            and row["identity"].get("qualifier") is None
+        ):
+            family_candidates = (
+                service.enrichment_repository
+                .search_master_by_sdo_and_identity_hints(
+                    [
+                        (
+                            row["sdo_id"],
+                            row.get("search_sdo_name") or row["sdo_name"],
+                            row["identity"].get("core_number") or "",
+                            None,
+                        )
+                    ]
+                )
+            )
+            request_candidates.extend(family_candidates)
+
         if row.get("expand_family"):
             with use_candidate_status_map(status_map):
                 request_candidates = service._select_candidates(
@@ -378,7 +432,12 @@ def assemble_results(
             templates = []
             for standard in standards_by_id.values():
                 is_master = hasattr(standard, "standardyear")
-                requested_year = row["identity"].get("year")
+                is_series_request = (
+                    row["identity"].get("qualifier") == "SERIES"
+                )
+                # The year on a series request identifies the requested
+                # series/version, not a required edition year for every part.
+                requested_year = _requested_edition_year(row)
                 is_match = True
                 if is_master:
                     data = service.format_master_standard(standard)
@@ -396,6 +455,11 @@ def assemble_results(
                         status, is_match = "AVAILABLE", True
                     data["catalog_status"] = (
                         status_info.get("name")
+                        if status_info
+                        else None
+                    )
+                    data["parent_status"] = (
+                        status_info.get("parent_name")
                         if status_info
                         else None
                     )
@@ -417,10 +481,26 @@ def assemble_results(
                                 status_info.get("name")
                             )
                     ):
-                        status = str(
-                            status_info.get("name") or "UNAVAILABLE"
-                        ).upper()
+                        status = (
+                            service._normalize_unavailable_status_label(
+                                status_info.get("name")
+                            )
+                            or str(
+                                status_info.get("name") or "UNAVAILABLE"
+                            ).upper()
+                        )
                         is_match = False
+                    if isinstance(data, dict):
+                        data["catalog_status"] = (
+                            status_info.get("name")
+                            if status_info
+                            else None
+                        )
+                        data["parent_status"] = (
+                            status_info.get("parent_name")
+                            if status_info
+                            else None
+                        )
                     actual_year = service._candidate_year(
                         standard,
                         row["sdo_name"],
@@ -447,7 +527,13 @@ def assemble_results(
                 requested_lifecycle_status = str(
                     row.get("requested_edition_status") or ""
                 ).strip().upper()
-                if service._requested_edition_lifecycle_status(row, actual_year):
+                if (
+                    not is_series_request
+                    and service._requested_edition_lifecycle_status(
+                        row,
+                        actual_year,
+                    )
+                ):
                     # A duplicated catalogue record can be incorrectly
                     # marked ACTIVE even when the same requested edition
                     # has an explicit Historical/Withdrawn lifecycle row.
@@ -498,16 +584,17 @@ def assemble_results(
                     and int(actual_year) < int(requested_year)
                 )
                 if is_match and requested_year_is_newer_than_database:
-                    # Never present an older database edition as a match
-                    # for a newer, explicitly requested edition.
+                    # Never present an older database edition as a Found match
+                    # for a newer, explicitly requested edition. Surface it as
+                    # an older-version notice instead.
                     is_match = False
-                    status = "NOT FOUND"
+                    status = "OLDER VERSION AVAILABLE"
 
                 status_detail = (
                     (
-                        f"No database edition is available for requested "
-                        f"year {requested_year}; latest available database "
-                        f"edition is {actual_year}."
+                        f"Requested year {requested_year} is not in the "
+                        f"catalogue; available in older version "
+                        f"{actual_year}."
                         if requested_year_is_newer_than_database
                         else f"Requested year {requested_year}; returned latest available edition {actual_year}."
                     )
@@ -709,6 +796,38 @@ def assemble_results(
                         )
                     ),
                     "standard": data if is_match else None,
+                    # Keep the catalogue subscription flag even when the row
+                    # is unmatched (withdrawn/internal), so Excel can report
+                    # Standards-e-Pedia availability accurately. Prefer master
+                    # enrichment because legacy search rows omit this column.
+                    "bsb_subscription": service._subscription_flag_value(
+                        data if isinstance(data, dict) else None,
+                        standard,
+                    ),
+                    "parent_status": (
+                        (
+                            data.get("parent_status")
+                            if isinstance(data, dict)
+                            else None
+                        )
+                        or (
+                            status_info.get("parent_name")
+                            if status_info
+                            else None
+                        )
+                    ),
+                    "catalog_status": (
+                        (
+                            data.get("catalog_status")
+                            if isinstance(data, dict)
+                            else None
+                        )
+                        or (
+                            status_info.get("name")
+                            if status_info
+                            else None
+                        )
+                    ),
                     "actions": {},
                     "_source_request_identity": row.get(
                         "source_request_identity"
@@ -723,17 +842,10 @@ def assemble_results(
         # NOT FOUND
         # ----------------------------------------------------
 
-        requested_edition_status = str(
-            row.get("requested_edition_status") or ""
-        ).strip().upper()
-        if re.search(r"(?i)\bDO\s+NOT\s+USE\b", requested_edition_status):
-            requested_edition_status = "WITHDRAWN"
         unavailable_edition_status = (
-            requested_edition_status
-            if service._status_label_is_unavailable(
-                requested_edition_status
+            service._normalize_unavailable_status_label(
+                row.get("requested_edition_status")
             )
-            else None
         )
         if unavailable_edition_status:
             not_found_detail = (
@@ -760,6 +872,9 @@ def assemble_results(
             "replacement_standard": row.get("stated_replacement"),
             "superseded_by": None,
             "standard": None,
+            "bsb_subscription": 0,
+            "parent_status": None,
+            "catalog_status": None,
             "actions": {"manual_search": True},
             "_source_request_identity": row.get(
                 "source_request_identity"

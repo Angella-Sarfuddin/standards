@@ -9,6 +9,7 @@ from app.core.standard_identity import (
     normalize_identity_core,
     normalize_tokens,
     parse_identity,
+    split_publisher_dual_designation,
     split_stated_replacement,
 )
 
@@ -186,6 +187,14 @@ def prepare_input_rows(
                 identity,
                 include_subsections,
             )
+            # An unqualified API publication number identifies a family when
+            # the catalogue stores separate numbered parts. Return all
+            # available parts; an explicit part qualifier remains narrowed.
+            if (
+                str(search_sdo_name or sdo_name).strip().upper() == "API"
+                and identity.get("qualifier") is None
+            ):
+                expand_family = True
             if (
                 include_subsections
                 and str(identity.get("qualifier") or "").startswith("PART:")
@@ -228,6 +237,35 @@ def prepare_input_rows(
                 expand_family,
             ) = parsed_request
 
+        publisher_dual = split_publisher_dual_designation(
+            search_sdo_name or sdo_name,
+            lookup_displaystdno,
+        )
+        publisher_dual_alternate = None
+        if publisher_dual:
+            alt_sdo = publisher_dual["alternate_sdo"]
+            alt_display = publisher_dual["alternate_display"]
+            alt_lookup_sdo, alt_lookup_standard, alt_id_name = (
+                canonicalize_search_request(alt_sdo, alt_display)
+            )
+            alt_search_sdo = alt_lookup_sdo or alt_sdo
+            alt_sdo_id = (
+                sdo_map.get((alt_id_name or "").upper())
+                or sdo_map.get((alt_search_sdo or "").upper())
+                or sdo_map.get((alt_sdo or "").upper())
+            )
+            if alt_search_sdo and alt_lookup_standard:
+                publisher_dual_alternate = {
+                    "sdo_name": alt_search_sdo,
+                    "displaystdno": alt_lookup_standard,
+                    "sdo_id": alt_sdo_id,
+                    "identity": parse_identity(
+                        alt_search_sdo,
+                        alt_lookup_standard,
+                    ),
+                    "leading_chosen": publisher_dual["leading_chosen"],
+                }
+
         prepared_rows.append(
             {
                 "sdo_name": sdo_name,
@@ -245,6 +283,7 @@ def prepare_input_rows(
                     if stated_replacement
                     else None
                 ),
+                "publisher_dual_alternate": publisher_dual_alternate,
                 "has_revision_or_amendment": has_revision_or_amendment,
                 "full_display_number": full_display_number,
                 "sdo_id": sdo_id,

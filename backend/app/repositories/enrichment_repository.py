@@ -33,6 +33,23 @@ from app.core.standard_identity import (
 
 
 class EnrichmentRepository:
+    def _identity_search_sdo_ids(self, sdo_id, sdo_prefix):
+        """Include catalogue owners for joint publisher designations."""
+        normalized = str(sdo_prefix or "").upper().replace(" ", "")
+        if normalized not in {"IEEE", "IEC"}:
+            return (sdo_id,)
+        aliases = ("IEC", "IEEE") if normalized == "IEEE" else ("IEEE",)
+        alias_ids = (
+            self.db.query(SDO.id)
+            .filter(
+                or_(
+                    SDO.sdo_title.in_(aliases),
+                    SDO.sdo_fullname.in_(aliases),
+                )
+            )
+            .all()
+        )
+        return tuple(dict.fromkeys([sdo_id, *(row[0] for row in alias_ids)]))
 
     def __init__(self, db):
         self.db = db
@@ -414,7 +431,7 @@ class EnrichmentRepository:
 
             if containment:
                 bucket["containment"][key] = containment
-            elif bound:
+            if bound:
                 bucket["bound"].setdefault(key, set()).update(bound)
 
         if not grouped:
@@ -424,7 +441,11 @@ class EnrichmentRepository:
         seen = set()
         text_columns = ("display_stdNo", "standardno")
 
-        for (sdo_id, _prefix), bucket in grouped.items():
+        for (sdo_id, prefix), bucket in grouped.items():
+          for search_sdo_id in self._identity_search_sdo_ids(sdo_id, prefix):
+            search_prefixes = set(bucket["prefixes"])
+            if str(prefix).upper() == "IEEE":
+                search_prefixes.update({"IEC/IEEE", "IEEE/IEC"})
             cores_in_batch = list(
                 dict.fromkeys(core for (core, _year) in bucket["containment"])
             )
@@ -439,9 +460,9 @@ class EnrichmentRepository:
             rows = fetch_long_core_candidates(
                 self.db,
                 model=StandardMaster,
-                sdo_id=sdo_id,
+                sdo_id=search_sdo_id,
                 cores=cores_in_batch,
-                sdo_prefixes=bucket["prefixes"],
+                sdo_prefixes=search_prefixes,
                 text_columns=(
                     StandardMaster.display_stdNo,
                     StandardMaster.standardno,
@@ -471,7 +492,7 @@ class EnrichmentRepository:
                         self.db,
                         lambda: self.db.query(StandardMaster)
                         .filter(
-                            StandardMaster.sdo_id == sdo_id,
+                            StandardMaster.sdo_id == search_sdo_id,
                             *extra_filters,
                             or_(*literal_filters),
                         )
@@ -512,7 +533,7 @@ class EnrichmentRepository:
 
                 query_filters = [
                     self._master_searchable_filter(),
-                    StandardMaster.sdo_id == sdo_id,
+                    StandardMaster.sdo_id == search_sdo_id,
                     or_(*filters),
                 ]
                 if len(years) == 1:
@@ -539,7 +560,6 @@ class EnrichmentRepository:
                         seen,
                     )
                 )
-
         return results
 
     # ==========================================
@@ -941,7 +961,9 @@ class EnrichmentRepository:
         return list(aliases_by_id.values())
 
     def get_standard_status_map(self, status_ids):
-        """Load display and cart visibility for detailed standard statuses."""
+        """Load display, cart visibility, and parent status labels."""
+        from app.models.standard_status_code import StandardStatusCode
+
         status_ids = {
             int(status_id)
             for status_id in status_ids or []
@@ -957,13 +979,22 @@ class EnrichmentRepository:
                 StandardStatus.status,
                 StandardStatus.std_show,
                 StandardStatus.cart_show,
-            ).filter(StandardStatus.id.in_(status_ids)),
+                StandardStatus.parent_status_id,
+                StandardStatusCode.title.label("parent_title"),
+            )
+            .outerjoin(
+                StandardStatusCode,
+                StandardStatusCode.Id == StandardStatus.parent_status_id,
+            )
+            .filter(StandardStatus.id.in_(status_ids)),
         )
         return {
             row.id: {
                 "name": row.status,
                 "std_show": row.std_show,
                 "cart_show": row.cart_show,
+                "parent_status_id": row.parent_status_id,
+                "parent_name": row.parent_title,
             }
             for row in rows
         }

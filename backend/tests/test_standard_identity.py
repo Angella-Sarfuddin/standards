@@ -14,14 +14,322 @@ from app.core.standard_identity import (
     identity_core_appears,
     identity_core_sql_pattern,
     identity_index_cores,
+    identity_indexable_like_patterns,
     identity_lookup_core_tokens,
     identity_matches,
     identity_unprefixed_like_patterns,
     parse_identity,
+    prefer_publisher_dual_designation,
+    split_publisher_dual_designation,
 )
 
 
 class StandardIdentityTests(unittest.TestCase):
+    def test_concatenated_title_is_not_part_of_iec_designation(self):
+        identity = parse_identity(
+            "IEC",
+            "62271-102High voltage switchgear and controlgear: "
+            "Part-102: Alternating current disconnectors and earthing switches.",
+        )
+        self.assertEqual(identity["core_number"], "62271")
+        self.assertEqual(identity["qualifier"], "PART:102")
+
+    def test_concatenated_power_transformer_title_is_not_part_of_iec_designation(self):
+        identity = parse_identity(
+            "IEC",
+            "60076-4Power Transformer-Part-4: Guide to the lightning "
+            "impulse and switching impulse testing-Power transformer and reactors",
+        )
+        self.assertEqual(identity["core_number"], "60076")
+        self.assertEqual(identity["qualifier"], "PART:4")
+
+    def test_iec_adoption_and_concatenated_titles_are_normalized(self):
+        self.assertEqual(
+            parse_identity("IEC", "62444 / EN 62444")["core_number"],
+            "62444",
+        )
+
+    def test_iec_year_and_title_concatenation_is_not_part_of_designation(self):
+        requested = parse_identity("IEC", "61508:2010 PART 6")
+        self.assertEqual(requested["core_number"], "61508")
+        self.assertEqual(requested["qualifier"], "PART:6")
+        self.assertEqual(requested["year"], 2010)
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "61869-2:2012Instrument Transformer- PART 2/: "
+                "Additional requirements for current transformers",
+            )[1],
+            "61869-2:2012",
+        )
+        self.assertEqual(
+            canonicalize_search_request("IEC", "60076-7:2018 RLV")[1],
+            "60076-7:2018",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC", "60726Dry Type Power Transformers"
+            )[1],
+            "60726",
+        )
+        requested = parse_identity("IEC", "61386-21")
+        candidate = parse_identity("IEC", "IEC 61386-21:2021")
+        wrong_candidate = parse_identity("IEC", "IEC 61386-22:2021")
+        self.assertEqual(requested["qualifier"], "PART:21")
+        self.assertTrue(identity_matches(requested, candidate))
+        self.assertFalse(identity_matches(requested, wrong_candidate))
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "61869-1: 2023General requirements for instrument transformers "
+                "above 1 kV AC or 1.5 kV DC.",
+            )[1],
+            "61869-1: 2023",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC",
+                "60099-4Surge Arresters-Part-4: Metal Oxide Surge Arresters "
+                "without gap for A.C systems",
+            )[1],
+            "60099-4",
+        )
+        self.assertEqual(
+            canonicalize_search_request(
+                "IEC", "60584-1:2013 / 3:2021"
+            )[1],
+            "60584-1:2013",
+        )
+        self.assertEqual(
+            parse_identity(
+                "IEC",
+                "61386-21Conduit systems for cable management",
+            )["core_number"],
+            "61386",
+        )
+        self.assertEqual(
+            parse_identity(
+                "IEC",
+                "60598-2Luminaires: Part-2: Particular requirements-"
+                "Fixed general purpose luminaires",
+            )["core_number"],
+            "60598PART2",
+        )
+
+    def test_api_edition_and_errata_text_keeps_base_designation(self):
+        identity = parse_identity(
+            "API",
+            "API 674: (3rd Edition, December 2010 with Errate 2 "
+            "Dtd. April 2015) API Standard",
+        )
+        self.assertEqual(identity["core_number"], "674")
+        self.assertEqual(
+            canonicalize_search_request("API", "API Standard 675"),
+            ("API", "API 675", "API"),
+        )
+
+    def test_api_publication_type_is_optional_during_identity_lookup(self):
+        requested = parse_identity("API", "API 579-A : 2025")
+        catalog = parse_identity("API", "API TR 579-A : 2025")
+        other_number = parse_identity("API", "API TR 579-B : 2025")
+
+        self.assertEqual(requested["year"], 2025)
+        self.assertEqual(catalog["designation"], "TR")
+        self.assertTrue(identity_matches(requested, catalog))
+        self.assertFalse(identity_matches(requested, other_number))
+        self.assertEqual(
+            canonicalize_search_request(
+                "API",
+                "API Technical Report 579-A : 2025",
+            ),
+            ("API", "API TR 579-A : 2025", "API"),
+        )
+
+        from app.core.standard_identity import (
+            like_pattern_is_prefix_indexable,
+        )
+
+        patterns = identity_indexable_like_patterns("API", "579A")
+        self.assertIn("API TR 579-A%", patterns)
+        self.assertTrue(
+            all(like_pattern_is_prefix_indexable(pattern) for pattern in patterns)
+        )
+
+    def test_iec_bare_number_discovers_tr_ts_pas_guide_variants(self):
+        requested = parse_identity("IEC", "60909-1")
+        tr = parse_identity("IEC", "IEC TR 60909-1:2002")
+        ts = parse_identity("IEC", "IEC TS 60909-1:1991")
+        other_part = parse_identity("IEC", "IEC TR 60909-2:2008")
+
+        self.assertIsNone(requested["designation"])
+        self.assertEqual(tr["designation"], "TR")
+        self.assertEqual(ts["designation"], "TS")
+        self.assertEqual(requested["qualifier"], "PART:1")
+        self.assertTrue(identity_matches(requested, tr, check_year=False))
+        self.assertTrue(identity_matches(requested, ts, check_year=False))
+        self.assertFalse(identity_matches(requested, other_part, check_year=False))
+
+        patterns = identity_indexable_like_patterns("IEC", "60909PART1")
+        self.assertIn("IEC TR 60909%", patterns)
+        self.assertIn("IEC TS 60909%", patterns)
+        self.assertIn("IEC PAS 60909%", patterns)
+        self.assertIn("IEC GUIDE 60909%", patterns)
+        self.assertIn("IEC/TR 60909%", patterns)
+
+    def test_publication_type_sdo_column_maps_to_designation(self):
+        cases = (
+            ("IEC/TR", "62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TS", "62263", "IEC", "TS 62263", "TS", "62263"),
+            ("ISO/TR", "16949", "ISO", "TR 16949", "TR", "16949"),
+            ("ISO/TS", "16949", "ISO", "TS 16949", "TS", "16949"),
+            ("IEC TR", "62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TR", "TR 62263", "IEC", "TR 62263", "TR", "62263"),
+            ("IEC/TR", "IEC/TR 62263", "IEC", "TR 62263", "TR", "62263"),
+        )
+        for (
+            sdo_column,
+            number,
+            expected_sdo,
+            expected_display,
+            expected_designation,
+            expected_core,
+        ) in cases:
+            sdo, display, id_name = canonicalize_search_request(
+                sdo_column,
+                number,
+            )
+            self.assertEqual(sdo, expected_sdo)
+            self.assertEqual(display, expected_display)
+            self.assertEqual(id_name, expected_sdo)
+            identity = parse_identity(sdo, display)
+            self.assertEqual(identity["designation"], expected_designation)
+            self.assertEqual(identity["core_number"], expected_core)
+        identity = parse_identity(
+            *canonicalize_search_request("IEC/TR", "62263")[:2]
+        )
+        catalogue = parse_identity("IEC", "IEC TR 62263:2024")
+        self.assertTrue(identity_matches(identity, catalogue, check_year=False))
+
+    def test_header_label_does_not_override_sdo_in_standard_value(self):
+        self.assertEqual(
+            StandardExpressionParser.infer_sdo_and_body(
+                "ASME B31.3",
+                "STANDARD",
+            ),
+            ("ASME", "B31.3"),
+        )
+
+    def test_reaffirmation_followed_by_title_is_removed_generally(self):
+        identity = parse_identity(
+            "ASME",
+            "PTC 6: 2004 (Reaffirmed 2014) "
+            "Steam Turbines Performance Test Codes",
+        )
+        self.assertEqual(identity["core_number"], "PTC6")
+        self.assertEqual(identity["year"], 2004)
+
+    def test_colon_title_is_removed_for_any_sdo(self):
+        identity = parse_identity(
+            "API",
+            "RP 500 : Hazardous area classification "
+            "(Class/Division and Zone)",
+        )
+        self.assertEqual(identity["core_number"], "500")
+        self.assertEqual(identity["designation"], "RP")
+
+    def test_bis_standard_label_and_title_are_removed(self):
+        sdo, number, _ = canonicalize_search_request(
+            "BIS",
+            "Standard -IS 7167-1974 (Reaffirmed 2016): "
+            "Indian Standard Code for Selection and Use of Bucket Elevators",
+        )
+        self.assertEqual(sdo, "BIS")
+        self.assertEqual(number, "IS 7167-1974")
+
+    def test_bis_roman_parts_match_numeric_catalogue_parts(self):
+        self.assertEqual(
+            canonicalize_search_request("IS", "4682 (Part V)"),
+            ("IS", "4682 PART 5", "IS"),
+        )
+        self.assertEqual(
+            canonicalize_search_request("IS", "1893 (Part II)"),
+            ("IS", "1893 PART 2", "IS"),
+        )
+        self.assertEqual(
+            parse_identity("IS", "IS 4682 : Part 5 : 2024")["qualifier"],
+            "PART:5",
+        )
+        self.assertEqual(
+            parse_identity("IS", "IS 1893 : Part 2 : 2014")["qualifier"],
+            "PART:2",
+        )
+        self.assertTrue(
+            identity_matches(
+                parse_identity("IS", "IS 4682 (Part V)"),
+                parse_identity("IS", "IS 4682 : Part 5 : 2024"),
+            )
+        )
+        self.assertTrue(
+            identity_matches(
+                parse_identity("IS", "IS 1893 (Part II)"),
+                parse_identity("IS", "IS 1893 : Part 2 : 2014"),
+            )
+        )
+        self.assertEqual(
+            identity_lookup_core_tokens("IS", "1893", "PART:3"),
+            ["1893 PART 3", "1893"],
+        )
+        self.assertEqual(
+            identity_lookup_core_tokens("IEC", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
+        self.assertEqual(
+            identity_lookup_core_tokens("IEEE", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
+        joint = parse_identity(
+            "IEEE", "IEC/IEEE 60076-57-1202:2017 (EN-FR)"
+        )
+        standalone = parse_identity("IEEE", "60076-57-1202:2017")
+        self.assertEqual(joint["core_number"], standalone["core_number"])
+        self.assertEqual(joint["qualifier"], standalone["qualifier"])
+        self.assertTrue(
+            identity_matches(standalone, joint, check_year=False)
+        )
+
+    def test_bis_joint_publisher_labels_normalize_to_bis_catalogue(self):
+        for label, publisher in (
+            ("IS IEC", "IEC"),
+            ("IS/IEC", "IEC"),
+            ("BIS/IEC", "IEC"),
+            ("BIS IEC", "IEC"),
+            ("BIS/IEEE", "IEEE"),
+            ("BIS IEEE", "IEEE"),
+            ("BIS/ISO", "ISO"),
+            ("IS/ISO", "ISO"),
+        ):
+            with self.subTest(label=label):
+                self.assertEqual(
+                    canonicalize_search_request(
+                        label,
+                        "60079 29-1 2007",
+                    ),
+                    (
+                        "BIS",
+                        f"IS/{publisher} 60079 29-1 2007",
+                        "BIS",
+                    ),
+                )
+
+        identity = parse_identity(
+            "BIS",
+            "IS IEC 60079-29-1:2007",
+        )
+        self.assertEqual(identity["identifier_prefix"], "IS/IEC")
+        self.assertEqual(identity["core_number"], "60079PART29")
+        self.assertEqual(identity["qualifier"], "SECTION:1")
+        self.assertEqual(identity["year"], 2007)
+
     def matches(self, sdo, requested, candidate):
         return identity_matches(
             parse_identity(sdo, requested),
@@ -920,6 +1228,95 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(identity_core_appears("IS 875-1", "875"))
         self.assertFalse(identity_core_appears("API 1610", "610"))
 
+    def test_identity_core_appears_keeps_61936_part_lookup_intact(self):
+        # ``61936PART1`` contains the digits ``1936`` before ``P``; year
+        # stripping must not collapse that lookup core to ``6PART1``.
+        self.assertTrue(
+            identity_core_appears(
+                "IEC 61936-1:2021 (EN-FR)",
+                "61936PART1",
+            )
+        )
+
+    def test_ieee_std_number_is_not_rewritten_as_api_std(self):
+        self.assertEqual(
+            canonicalize_search_request("IEEE", "Std 1584"),
+            ("IEEE", "1584", "IEEE"),
+        )
+        self.assertEqual(
+            canonicalize_search_request("API", "Std 610"),
+            ("API", "API STD 610", "API"),
+        )
+        self.assertTrue(
+            self.matches("IEEE", "Std 1584", "IEEE 1584:2018")
+        )
+
+    def test_asme_bpvc_iid_metric_maps_to_catalogue_iidm(self):
+        identity = parse_identity("ASME", "BPVC IID (M)")
+        self.assertEqual(identity["core_number"], "BPVCIIDM")
+        self.assertTrue(
+            self.matches("ASME", "BPVC IID (M)", "BPVC IIDM : 2025")
+        )
+
+    def test_asme_bpvc_sec_x_maps_to_catalogue_bpvc_x(self):
+        identity = parse_identity("ASME", "BPVC Sec. X")
+        self.assertEqual(identity["core_number"], "BPVCX")
+        self.assertIsNone(identity["qualifier"])
+        self.assertTrue(
+            self.matches("ASME", "BPVC Sec. X", "BPVC X : 2025")
+        )
+
+    def test_asme_metric_slash_dual_discovers_non_metric_side(self):
+        from app.core.standard_identity import identity_lookup_core_tokens
+
+        tokens = identity_lookup_core_tokens(
+            "ASME",
+            "36.19M/36.19",
+            None,
+        )
+        self.assertIn("36.19M", tokens)
+        self.assertIn("36.19", tokens)
+        self.assertIn("B36.19", tokens)
+        self.assertTrue(
+            self.matches(
+                "ASME",
+                "B36.19M/36.19",
+                "ASME B36.19 : 2022",
+            )
+        )
+
+    def test_publisher_dual_designation_keeps_requested_or_leading_side(self):
+        dual = "62443-3-2 / ANSI/ISA-62443-3-2"
+        self.assertEqual(
+            prefer_publisher_dual_designation("IEC", dual),
+            "62443-3-2",
+        )
+        self.assertEqual(
+            prefer_publisher_dual_designation("ISA", dual),
+            "62443-3-2",
+        )
+        swapped = "ANSI/ISA-62443-3-2 / IEC 62443-3-2"
+        self.assertEqual(
+            prefer_publisher_dual_designation("IEC", swapped),
+            "62443-3-2",
+        )
+        self.assertIsNone(
+            split_publisher_dual_designation("ASME", "B36.19M/36.19")
+        )
+        identity = parse_identity("IEC", dual)
+        self.assertEqual(identity["core_number"], "62443PART3")
+        self.assertEqual(identity["qualifier"], "SECTION:2")
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                dual,
+                "IEC 62443-3-2:2020",
+            )
+        )
+        sdo, number, _ = canonicalize_search_request("IEC", dual)
+        self.assertEqual(sdo, "IEC")
+        self.assertEqual(number, "62443-3-2")
+
     def test_row_needs_identity_discovery_skips_strong_local_matches(self):
         row = {
             "identity": parse_identity("API", "API STD 610:2020"),
@@ -1256,6 +1653,96 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertTrue(identity_matches(reaffirmed, base_edition))
         self.assertFalse(identity_matches(reaffirmed, wrong_edition))
 
+    def test_previous_and_former_designation_notes_are_not_identity(self):
+        renamed = parse_identity(
+            "NEMA",
+            "NEMA BI 50052-2025 (Previously CB 15000-2020)",
+        )
+        formerly = parse_identity(
+            "NEMA",
+            "NEMA BI 50004-2026 (Formerly FB 1)",
+        )
+        formally = parse_identity(
+            "NEMA",
+            "NEMA BI-50006 -2024 (Formally RN1)",
+        )
+        requested = parse_identity("NEMA", "BI 50052")
+
+        self.assertEqual(renamed["core_number"], "BI50052")
+        self.assertEqual(renamed["year"], 2025)
+        self.assertIsNone(renamed["qualifier"])
+        self.assertTrue(identity_matches(requested, renamed, check_year=False))
+        self.assertEqual(formerly["core_number"], "BI50004")
+        self.assertEqual(formerly["year"], 2026)
+        self.assertEqual(formally["core_number"], "BI50006")
+        self.assertEqual(formally["year"], 2024)
+
+    def test_short_legacy_alias_parentheses_are_not_identity(self):
+        aliased = parse_identity(
+            "NEMA",
+            "NEMA BI 50016-2024 (VE2)",
+        )
+        requested_hyphen = parse_identity("NEMA", "NEMA BI-50016")
+        requested_space = parse_identity("NEMA", "BI 50016")
+
+        self.assertEqual(aliased["core_number"], "BI50016")
+        self.assertEqual(aliased["year"], 2024)
+        self.assertNotIn("VE2", str(aliased["core_number"]))
+        self.assertTrue(
+            identity_matches(requested_hyphen, aliased, check_year=False)
+        )
+        self.assertTrue(
+            identity_matches(requested_space, aliased, check_year=False)
+        )
+
+    def test_metadata_parentheses_are_stripped_but_parts_are_kept(self):
+        with_year_note = parse_identity(
+            "NEMA",
+            "NEMA BI 50073-2021 (2025) "
+            "(Previously Application Guide Vibration-2021) : 2025",
+        )
+        requested = parse_identity("NEMA", "BI 50073")
+        part_kept = parse_identity("BIS", "IS 6533 (Part 2) : 1989")
+        cited = parse_identity(
+            "IS",
+            "IS 2071 : Part 1 : 2016(IEC PUB 60-1 : 2010)",
+        )
+
+        self.assertEqual(with_year_note["core_number"], "BI50073")
+        self.assertNotIn("2025", str(with_year_note["core_number"]))
+        self.assertTrue(
+            identity_matches(requested, with_year_note, check_year=False)
+        )
+        self.assertEqual(part_kept["core_number"], "6533")
+        self.assertEqual(part_kept["qualifier"], "PART:2")
+        self.assertEqual(cited["core_number"], "2071")
+        self.assertEqual(cited["qualifier"], "PART:1")
+
+    def test_compact_review_notes_are_not_identity(self):
+        from app.core.standard_identity import reaffirmation_year
+
+        reviewed = parse_identity(
+            "NEMA",
+            "NEMA BI 50090-2015 (R2020,S2025)",
+        )
+        stabilized = parse_identity(
+            "NEMA",
+            "NEMA BI 50090-2015 (S2025)",
+        )
+        requested = parse_identity("NEMA", "BI 50090")
+
+        self.assertEqual(reviewed["core_number"], "BI50090")
+        self.assertEqual(reviewed["year"], 2015)
+        self.assertIsNone(reviewed["qualifier"])
+        self.assertTrue(
+            identity_matches(requested, reviewed, check_year=False)
+        )
+        self.assertEqual(stabilized["core_number"], "BI50090")
+        self.assertEqual(
+            reaffirmation_year("NEMA BI 50090-2015 (R2020,S2025)"),
+            2025,
+        )
+
     def test_qualifier_only_identity_matches_separator_variants(self):
         self.assertTrue(
             self.matches(
@@ -1264,6 +1751,27 @@ class StandardIdentityTests(unittest.TestCase):
                 "API MPMS Chapter 9/3",
             )
         )
+
+    def test_api_mpms_chapter_keeps_chapter_number(self):
+        for requested in (
+            "MPMS Ch. 5.6",
+            "API MPMS Ch. 5.6",
+            "API MPMS Chapter 5.6",
+            "MPMS Chapter 5.6",
+        ):
+            with self.subTest(requested=requested):
+                sdo, number, _ = canonicalize_search_request("API", requested)
+                self.assertEqual(sdo, "API")
+                self.assertEqual(number, "API MPMS Chapter 5.6")
+                identity = parse_identity(sdo, number)
+                self.assertEqual(identity.get("qualifier"), "CHAPTER:5-6")
+                self.assertTrue(
+                    self.matches(
+                        "API",
+                        requested,
+                        "API MPMS Chapter 5.6 : 2021",
+                    )
+                )
 
     def test_year_like_catalogue_numbers_keep_identity_core(self):
         for sdo, requested, candidate in (
@@ -1409,6 +1917,9 @@ class StandardIdentityTests(unittest.TestCase):
         )
 
     def test_part_range_matches_a_part_inside_the_range(self):
+        ranged = parse_identity("IEC", "60947 (Pt 1-8)")
+        self.assertEqual(ranged["qualifier"], "PART:1-8")
+        self.assertTrue(ranged["family_lookup"])
         self.assertTrue(
             self.matches(
                 "IEC",
@@ -1423,6 +1934,42 @@ class StandardIdentityTests(unittest.TestCase):
                 "IEC 60947-9:2020",
             )
         )
+
+    def test_plural_parts_range_is_not_part_section_compound(self):
+        identity = parse_identity(
+            "IEC",
+            "61511 Parts 0-4 with subsections (Total- 6 codes)",
+        )
+        self.assertEqual(identity["core_number"], "61511")
+        self.assertEqual(identity["qualifier"], "PART:0-4")
+        self.assertTrue(identity["family_lookup"])
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC TR 61511-0:2018",
+            )
+        )
+        self.assertTrue(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC 61511-3:2016 (EN-FR)",
+            )
+        )
+        self.assertFalse(
+            self.matches(
+                "IEC",
+                "61511 Parts 0-4 with subsections (Total- 6 codes)",
+                "IEC 61508-1:2010 (EN-FR)",
+            )
+        )
+
+    def test_singular_part_hyphen_section_still_splits(self):
+        identity = parse_identity("IEC", "IEC 60079 Part 35-2")
+        self.assertEqual(identity["core_number"], "60079PART35")
+        self.assertEqual(identity["qualifier"], "SECTION:2")
+        self.assertFalse(identity["family_lookup"])
 
     def test_parenthesized_part_range_expands_to_clean_part_identifiers(self):
         expanded = DocumentService()._expand_canonical_rows([{
@@ -1747,23 +2294,21 @@ class StandardIdentityTests(unittest.TestCase):
         requested = parse_identity("BIS", "IS IEC 60079 30-1")
         hyphenated = parse_identity("BIS", "IS/IEC 60079-30-1:2007")
         explicit = parse_identity("BIS", "IS/IEC 60079 PART 30 SECTION 1")
+        printed = parse_identity(
+            "BIS",
+            "IS/IEC/IEEE 60079 : Part 30 : Sec 1 : 2015",
+        )
 
         self.assertEqual(requested["core_number"], "60079PART30")
         self.assertEqual(requested["qualifier"], "SECTION:1")
         self.assertEqual(hyphenated["core_number"], "60079PART30")
         self.assertEqual(hyphenated["qualifier"], "SECTION:1")
+        self.assertEqual(printed["core_number"], "60079PART30")
+        self.assertEqual(printed["qualifier"], "SECTION:1")
+        self.assertEqual(printed["year"], 2015)
         self.assertTrue(identity_matches(requested, hyphenated, check_year=False))
         self.assertTrue(identity_matches(requested, explicit, check_year=False))
-        self.assertTrue(
-            identity_matches(
-                requested,
-                parse_identity(
-                    "BIS",
-                    "IS/IEC/IEEE 60079 : Part 30 : Sec 1 : 2015",
-                ),
-                check_year=False,
-            )
-        )
+        self.assertTrue(identity_matches(requested, printed, check_year=False))
         self.assertFalse(
             identity_matches(
                 requested,
@@ -1837,6 +2382,44 @@ class StandardIdentityTests(unittest.TestCase):
                 row,
             )
         self.assertIs(selected, newer)
+
+    def test_bis_joint_part_returns_latest_available_edition(self):
+        row = {
+            "sdo_name": "BIS",
+            "search_sdo_name": "BIS",
+            "requested_sdo_name": "IS IEC",
+            "identity": parse_identity("BIS", "IS IEC 60079 5 2007"),
+        }
+        older = SimpleNamespace(
+            id=1,
+            sdo_id=21,
+            status_id=11,
+            standardno="IS/IEC 60079 : Part 5",
+            display_stdNo="IS/IEC 60079 : Part 5 : 2007",
+            standardyear=2007,
+            DocumentAvailability=0,
+            recent=0,
+        )
+        current = SimpleNamespace(
+            id=2,
+            sdo_id=21,
+            status_id=16,
+            standardno="IS/IEC 60079 : Part 5",
+            display_stdNo="IS/IEC 60079 : Part 5 : 2015",
+            standardyear=2015,
+            DocumentAvailability=1,
+            recent=0,
+        )
+        with use_candidate_status_map({
+            11: {"name": "Historical", "cart_show": 0, "std_show": 0},
+            16: {"name": "Revised", "cart_show": 1, "std_show": 1},
+        }):
+            selected = DocumentSearchService._select_master_candidate(
+                [older, current],
+                row,
+            )
+
+        self.assertIs(selected, current)
 
     def test_older_part_year_matches_the_latest_catalogue_edition(self):
         from app.core.standard_identity import identity_core_appears
@@ -1985,6 +2568,28 @@ class StandardIdentityTests(unittest.TestCase):
             )
         )
 
+    def test_parenthetical_publisher_citations_are_not_identity(self):
+        cited = parse_identity(
+            "IS",
+            "IS 2071 : Part 1 : 2016(IEC PUB 60-1 : 2010)",
+        )
+        requested = parse_identity("IS", "IS 2071 1")
+        mod_cited = parse_identity(
+            "IS",
+            "IS 12065 : 2025(IEC 60034-9 : 2021, MOD)",
+        )
+
+        self.assertEqual(cited["core_number"], "2071")
+        self.assertEqual(cited["qualifier"], "PART:1")
+        self.assertEqual(cited["year"], 2016)
+        self.assertTrue(identity_matches(requested, cited, check_year=False))
+        self.assertEqual(mod_cited["core_number"], "12065")
+        self.assertEqual(mod_cited["year"], 2025)
+        self.assertFalse(
+            "IEC" in str(cited["core_number"])
+            or "PUB" in str(cited["core_number"])
+        )
+
     def test_bis_adoption_of_any_publisher_is_priced_and_plain_is_is_not(self):
         from app.core.standard_identity import (
             bis_names_another_standard,
@@ -2085,6 +2690,11 @@ class StandardIdentityTests(unittest.TestCase):
                 identity = parse_identity("IEC", normalized)
                 self.assertEqual(identity["core_number"], "60034")
                 self.assertEqual(identity["qualifier"], "PART:1")
+        amendment = parse_identity(
+            "BSI",
+            "BS EN 50122-2:2022+A1:2025",
+        )
+        self.assertEqual(amendment["year"], 2022)
 
     def test_legacy_is_date_components_are_metadata_not_parts(self):
         cases = {
@@ -2325,6 +2935,24 @@ class StandardIdentityTests(unittest.TestCase):
             all("duplicate_requests" not in result for result in results)
         )
 
+    def test_asme_errata_records_are_not_base_standard_matches(self):
+        errata = SimpleNamespace(
+            standardno="ASME B36.19 Errata:2023",
+            display_stdNo="ASME B36.19 Errata:2023",
+            title="",
+        )
+        base = SimpleNamespace(
+            standardno="B36.19",
+            display_stdNo="ASME B36.19 : 2022",
+            title="",
+        )
+        self.assertTrue(
+            DocumentSearchService._candidate_should_be_excluded(errata)
+        )
+        self.assertFalse(
+            DocumentSearchService._candidate_should_be_excluded(base)
+        )
+
     def test_ul_red_line_and_revision_records_are_not_base_standard_matches(self):
         candidates = [
             SimpleNamespace(
@@ -2453,6 +3081,63 @@ class StandardIdentityTests(unittest.TestCase):
             identity_core_sql_pattern("D1250"),
             "D%1250",
         )
+
+    def test_letter_digit_variants_include_hyphen_forms(self):
+        from app.core.standard_identity import (
+            identity_indexable_like_patterns,
+            parse_identity,
+        )
+
+        spaced = parse_identity("ASME", "PCC 2")
+        self.assertIn("PCC-2", spaced["variants"])
+        self.assertIn("ASME PCC-2", spaced["variants"])
+        self.assertIn("PCC2", spaced["variants"])
+
+        hyphen = parse_identity("ASME", "PCC-2")
+        self.assertIn("PCC 2", hyphen["variants"])
+        self.assertIn("PCC2", hyphen["variants"])
+        self.assertIn("ASME PCC 2", hyphen["variants"])
+
+        patterns = identity_indexable_like_patterns("ASME", "PCC2")
+        self.assertIn("ASME PCC-2%", patterns)
+        self.assertIn("PCC-2%", patterns)
+        self.assertIn("ASME PCC 2%", patterns)
+        self.assertIn("ASME PCC2%", patterns)
+
+    def test_glued_title_prose_is_detached_from_designation(self):
+        cases = [
+            (
+                "IEC",
+                "60214-1Tap changers-Part-1: Performance requirements and test method",
+                "60214",
+                "PART:1",
+            ),
+            (
+                "IEC",
+                "IEC 60214-2Tap changers-Part-2: Application guide",
+                "60214",
+                "PART:2",
+            ),
+            (
+                "IEC",
+                "60529Degrees of protection provided by enclosures (IP Code)",
+                "60529",
+                None,
+            ),
+            (
+                "IEC",
+                "62271-1:2026High-voltage switchgear and controlgear",
+                "62271",
+                "PART:1",
+            ),
+        ]
+        for sdo, display, core, qualifier in cases:
+            with self.subTest(display=display):
+                identity = parse_identity(sdo, display)
+                self.assertEqual(identity.get("core_number"), core)
+                self.assertEqual(identity.get("qualifier"), qualifier)
+                if "2026" in display:
+                    self.assertEqual(identity.get("year"), 2026)
 
 
 if __name__ == "__main__":

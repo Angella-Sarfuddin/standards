@@ -8,6 +8,10 @@ from app.core.standard_identity import (
     normalize_tokens,
     parse_identity,
 )
+from app.services.document_search.lifecycle_status import (
+    _lifecycle_status_from_evidence,
+    _normalize_unavailable_status_label,
+)
 
 
 def _source_request_key(result):
@@ -59,9 +63,13 @@ def _must_remain_unmatched(result):
     ):
         return True
     if re.search(
-        r"(?i)no database edition is available for requested year",
+        r"(?i)no database edition is available for requested year|"
+        r"available in older version|"
+        r"older version available",
         detail,
     ):
+        return True
+    if status == "older version available":
         return True
     return False
 
@@ -129,6 +137,14 @@ def deduplicate_results(results, service_class):
 
         if not result.get("matched"):
             result = dict(result)
+            current_status = str(result.get("status") or "").strip().upper()
+            lifecycle_status = _normalize_unmatched_lifecycle_status(result)
+            if current_status == "OLDER VERSION AVAILABLE":
+                result["status"] = "OLDER VERSION AVAILABLE"
+            elif lifecycle_status:
+                # Keep withdrawn/historical visible in the Not Found list
+                # instead of collapsing every unmatched row to NOT FOUND.
+                result["status"] = lifecycle_status
             reason = service_class._not_found_reason(result)
             result["not_found_reason"] = reason
             if not str(result.get("status_detail") or "").strip():
@@ -137,9 +153,13 @@ def deduplicate_results(results, service_class):
                     if reason == "SDO not found"
                     else (
                         "No available catalog record was found, and no "
-                        "withdrawn or historical status was identified."
+                        "unavailable lifecycle status was identified."
                         if reason == "Not found in catalog"
-                        else f"The requested edition is {reason.casefold()}."
+                        else (
+                            str(result.get("status_detail") or "").strip()
+                            if reason == "Older version available"
+                            else f"The requested edition is {reason.casefold()}."
+                        )
                     )
                 )
         standard = result.get("standard") or {}
@@ -203,33 +223,46 @@ def deduplicate_results(results, service_class):
     return deduplicated
 
 
+def _normalize_unmatched_lifecycle_status(result):
+    """Recover WITHDRAWN/HISTORICAL for unmatched rows when evidence exists."""
+    direct = _normalize_unavailable_status_label(result.get("status"))
+    if direct in {"WITHDRAWN", "HISTORICAL"}:
+        return direct
+    recovered = _lifecycle_status_from_evidence(
+        result.get("status_detail"),
+        result.get("catalog_status"),
+        result.get("superseded_by"),
+        result.get("replacement_standard"),
+        ((result.get("standard") or {}) or {}).get("catalog_status")
+        if isinstance(result.get("standard"), dict)
+        else None,
+    )
+    if recovered in {"WITHDRAWN", "HISTORICAL"}:
+        return recovered
+    return None
+
+
 def not_found_reason(result):
     """Classify unmatched rows using lifecycle evidence when available."""
     status = str(result.get("status") or "").strip().casefold()
     detail = str(result.get("status_detail") or "").strip()
-    replacement = str(
-        result.get("superseded_by")
-        or result.get("replacement_standard")
-        or ""
-    ).strip()
-    evidence = " ".join((status, detail, replacement)).casefold()
-    if re.search(r"\bwithdrawn\b", evidence):
+    lifecycle = _normalize_unmatched_lifecycle_status(result)
+    if lifecycle == "WITHDRAWN":
         return "Withdrawn"
-    if re.search(r"\bdo\s+not\s+use\b", evidence):
-        return "Withdrawn"
-    if re.search(
-        r"\b(?:historical|historic|superseded|obsolete|archived)\b",
-        evidence,
-    ):
+    if lifecycle == "HISTORICAL":
         return "Historical"
+    if status == "older version available" or re.search(
+        r"(?i)available in older version|"
+        r"no database edition is available for requested year",
+        detail,
+    ):
+        return "Older version available"
     if re.search(
         r"(?i)revision/amendment requests are excluded|standalone "
         r"(?:revision|amendment)",
         detail,
     ):
         return "Standalone amendment request"
-    if re.search(r"\b(?:inactive|discontinued|not available)\b", evidence):
-        return "Unavailable"
     if status == "sdo not found":
         return "SDO not found"
     return "Not found in catalog"
@@ -244,4 +277,7 @@ def format_master_standard(standard):
         "url": standard.url,
         "sdo_id": standard.sdo_id,
         "standardyear": standard.standardyear,
+        "BSBSubscription": int(
+            getattr(standard, "BSBSubscription", 0) or 0
+        ),
     }

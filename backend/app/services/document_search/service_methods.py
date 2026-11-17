@@ -521,35 +521,37 @@ class DocumentSearchServiceMethods:
         if DocumentSearchService._candidate_should_be_excluded(candidate):
             return False
 
-        requested = row[
-            "identity"
-        ]
+        identities = [row["identity"]]
+        alternate = row.get("publisher_dual_alternate") or {}
+        if alternate.get("identity"):
+            identities.append(alternate["identity"])
 
         candidate_values = [
             candidate.display_stdNo or "",
             candidate.standardno or "",
         ]
 
-        for value in candidate_values:
+        for requested in identities:
+            for value in candidate_values:
 
-            if not value:
-                continue
+                if not value:
+                    continue
 
-            candidate_identity = parse_identity(
-                requested[
-                    "sdo_name"
-                ],
-                value,
-            )
+                candidate_identity = parse_identity(
+                    requested[
+                        "sdo_name"
+                    ],
+                    value,
+                )
 
-            if not identity_matches(
-                requested,
-                candidate_identity,
-                check_year=False,
-            ):
-                continue
+                if not identity_matches(
+                    requested,
+                    candidate_identity,
+                    check_year=False,
+                ):
+                    continue
 
-            return True
+                return True
 
         return False
 
@@ -741,16 +743,18 @@ class DocumentSearchServiceMethods:
     @staticmethod
     def _record_requested_edition_status(candidates, row, status_map=None):
         requested_year = (row.get("identity") or {}).get("year")
-        if not status_map or str(
-            row.get("requested_sdo_name") or row.get("sdo_name") or ""
-        ).strip().upper() in {"BIS", "IS"}:
+        if not status_map:
             return
         identity_candidates = [
-            candidate for candidate in candidates or []
-            and DocumentSearchService._candidate_matches_identity(
+            candidate
+            for candidate in candidates or []
+            if DocumentSearchService._candidate_matches_identity(
                 candidate,
                 row,
             )
+            # Internal-only Active duplicates are not current editions and
+            # must not supply (or block) WITHDRAWN/HISTORICAL reporting.
+            and not DocumentSearchService._is_bsb_internal_only(candidate)
         ]
         if requested_year is not None:
             exact_candidates = [
@@ -814,19 +818,14 @@ class DocumentSearchServiceMethods:
                     or status_info.get("name")
                     or ""
                 ).strip()
-                if DocumentSearchService._status_label_is_unavailable(
-                    status_name
-                ):
-                    row["requested_edition_status"] = (
-                        "WITHDRAWN"
-                        if re.search(
-                            r"(?i)\bDO\s+NOT\s+USE\b",
-                            status_name,
-                        )
-                        else status_name.upper()
+                normalized = (
+                    DocumentSearchService._normalize_unavailable_status_label(
+                        status_name
                     )
-                else:
-                    row["requested_edition_status"] = "NOT AVAILABLE"
+                )
+                row["requested_edition_status"] = (
+                    normalized or "NOT AVAILABLE"
+                )
                 return
 
     @staticmethod
@@ -837,6 +836,11 @@ class DocumentSearchServiceMethods:
             )
         )
         if embedded_status:
+            return False
+        # An Active Boss/internal-only duplicate is not a usable current
+        # edition. Treating it as visible hides Historical/Withdrawn
+        # siblings and turns bare requests into NOT FOUND.
+        if DocumentSearchService._is_bsb_internal_only(candidate):
             return False
         if not status_map:
             return None
@@ -1012,6 +1016,12 @@ class DocumentSearchServiceMethods:
         )
 
     @staticmethod
+    def _normalize_unavailable_status_label(status_name):
+        return lifecycle_status._normalize_unavailable_status_label(
+            status_name
+        )
+
+    @staticmethod
     def _candidate_embedded_lifecycle_status(candidate):
         return lifecycle_status._candidate_embedded_lifecycle_status(
             candidate
@@ -1104,7 +1114,12 @@ class DocumentSearchServiceMethods:
             or int(status_info.get("std_show") or 0) != 1
             or DocumentSearchService._status_label_is_unavailable(status_name)
         ):
-            return status_name.upper(), False
+            return (
+                DocumentSearchService._normalize_unavailable_status_label(
+                    status_name
+                )
+                or status_name.upper()
+            ), False
         if DocumentSearchService._is_bsb_internal_only(standard):
             return "NOT FOUND", False
         return "AVAILABLE", True
@@ -1127,11 +1142,8 @@ class DocumentSearchServiceMethods:
                 return None
         except (TypeError, ValueError):
             return None
-        status = str(row.get("requested_edition_status") or "").strip().upper()
-        return (
-            status
-            if DocumentSearchService._status_label_is_unavailable(status)
-            else None
+        return DocumentSearchService._normalize_unavailable_status_label(
+            row.get("requested_edition_status")
         )
 
     @staticmethod
@@ -1139,6 +1151,27 @@ class DocumentSearchServiceMethods:
         standard,
     ):
         return result_helpers.format_master_standard(standard)
+
+    @staticmethod
+    def _subscription_flag_value(standard_data, standard=None):
+        """Return 1/0 for Standards-e-Pedia from enrichment or catalogue flags."""
+        data = standard_data if isinstance(standard_data, dict) else {}
+        enrichment = data.get("enrichment") or {}
+        if enrichment.get("subscription_available") is True:
+            return 1
+        if enrichment.get("subscription_available") is False:
+            return 0
+        for value in (
+            data.get("BSBSubscription"),
+            getattr(standard, "BSBSubscription", None),
+        ):
+            if value is None:
+                continue
+            try:
+                return 1 if int(value) == 1 else 0
+            except (TypeError, ValueError):
+                continue
+        return 0
 
     @staticmethod
     def _normalize_bis_standard_designation(standard_data):

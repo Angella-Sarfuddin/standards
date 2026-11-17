@@ -87,10 +87,78 @@ const committeeDisplayCodes = (code, description, ownerSdo) => {
   if (owner === "IS") {
     owner = "BIS";
   }
-  if (!["ASTM", "BIS", "BSI", "IEC"].includes(owner)) {
+  if (
+    ![
+      "API",
+      "ASTM",
+      "BIS",
+      "BSI",
+      "IEC",
+      "ISO",
+      "AMPP-NACE",
+      "NACE",
+    ].includes(owner)
+  ) {
     return null;
   }
   const text = `${description || ""} ${code || ""}`.replace(/\s+/g, " ").trim();
+  if (owner === "API") {
+    return description?.trim() ? [description.trim()] : [];
+  }
+  if (owner === "AMPP-NACE" || owner === "NACE") {
+    const scLabels = uniqueLabels(
+      [...text.matchAll(/(?<![A-Z0-9])SC\s*0*(\d+[A-Z]?)(?![A-Z0-9])/gi)].map(
+        (match) => {
+          const number = match[1];
+          const suffix = /^\d+$/.test(number)
+            ? number.padStart(2, "0")
+            : number.toUpperCase();
+          return `SC ${suffix}`;
+        }
+      )
+    );
+    if (scLabels.length) {
+      return scLabels;
+    }
+    const numericCode = String(code || "").match(/(?<!\d)\d+(?:\.\d+)*(?!\d)/);
+    if (!numericCode) {
+      return [];
+    }
+    const number = numericCode[0];
+    const suffix = /^\d+$/.test(number) ? number.padStart(2, "0") : number;
+    return [`SC ${suffix}`];
+  }
+  if (owner === "ISO") {
+    const explicit = [
+      ...text.matchAll(
+        /\bISO\s*\/\s*TC\s*\d+[A-Z]?(?:\s*\/\s*(?:SC|WG|JWG|AHG|PT)\s*\d+[A-Z]?)*/gi
+      ),
+    ].map((match) =>
+      match[0]
+        .replace(/\bISO\s*\/\s*TC\s*/i, "ISO/TC ")
+        .replace(/\s*\/\s*/g, "/")
+        .replace(/\b(SC|WG|JWG|AHG|PT)\s*/gi, "$1 ")
+        .replace(/\s+/g, " ")
+        .replace(/\.+$/, "")
+        .trim()
+    );
+    if (explicit.length) {
+      return uniqueLabels(explicit);
+    }
+    const parts = String(code || "")
+      .replace(/\s+/g, "")
+      .split("/")
+      .filter(Boolean);
+    if (parts.length && parts.every((part) => /^\d+[A-Z]?$/i.test(part))) {
+      return [
+        `ISO/TC ${parts[0].replace(/^0+(?=\d)/, "")}${parts
+          .slice(1)
+          .map((part) => `/SC ${part.replace(/^0+(?=\d)/, "")}`)
+          .join("")}`,
+      ];
+    }
+    return [];
+  }
   if (owner === "BSI") {
     return uniqueLabels(
       [...text.matchAll(/(?:^|[^A-Z0-9])(GMB|GBM)\s*0*(\d+[A-Z]?)/gi)].map(
@@ -219,6 +287,7 @@ export const getSeriesDesignation = (result) => {
 
 export const deduplicateResultRows = (results) => {
   const seen = new Set();
+  const requestOccurrences = new Map();
   return (results || []).filter((result) => {
     const sdo = String(
       result?.requested_sdo || result?.sdo_name || result?.sdo || ""
@@ -239,12 +308,24 @@ export const deduplicateResultRows = (results) => {
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "");
     const sourceIdentity = result?.source_row_identity;
-    const sourceSuffix = sourceIdentity
-      ? `:source:${JSON.stringify(sourceIdentity)}`
-      : "";
+    // Keep repeated worksheet requests. Only collapse true clones that share
+    // the same source row (or the same synthetic occurrence when no source).
+    let sourceSuffix;
+    if (sourceIdentity) {
+      sourceSuffix = `:source:${JSON.stringify(sourceIdentity)}`;
+    } else {
+      const occurrenceKey = `${sdo}:${request}:${
+        result?.matched && result?.standard ? `found:${resolved}` : "unmatched"
+      }:${String(result?.status || "").toUpperCase()}:${String(
+        result?.status_detail || ""
+      ).toUpperCase()}`;
+      const occurrence = requestOccurrences.get(occurrenceKey) || 0;
+      requestOccurrences.set(occurrenceKey, occurrence + 1);
+      sourceSuffix = `:occurrence:${occurrence}`;
+    }
     const key =
       result?.matched && result?.standard
-        ? `found:${sdo}:${resolved}`
+        ? `found:${sdo}:${resolved}${sourceSuffix}`
         : `unmatched:${sdo}:${request}:${String(result?.status || "").toUpperCase()}:${String(result?.status_detail || "").toUpperCase()}${sourceSuffix}`;
     if (seen.has(key)) return false;
     seen.add(key);

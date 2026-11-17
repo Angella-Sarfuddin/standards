@@ -4,9 +4,24 @@ from types import SimpleNamespace
 
 from openpyxl import load_workbook
 
+from app.core.standard_identity import (
+    designation_is_ieee_iec_dual_logo,
+    ieee_iec_joint_prefix,
+    identity_lookup_core_tokens,
+    parse_identity,
+)
 from app.services.document_search import result_helpers
+from app.services.document_search.identity_discovery import (
+    build_identity_candidate_index,
+)
+from app.services.document_search.result_assembly import (
+    _requested_edition_year,
+)
 from app.services.document_search.enrichment_builder import (
     committee_display_codes,
+)
+from app.services.document_search.selection_context import (
+    use_candidate_status_map,
 )
 from app.services.document_search_service import DocumentSearchService
 from app.services.export_service import ExportService
@@ -54,6 +69,29 @@ class ResolvedEditionReportingTests(unittest.TestCase):
             "customer-list.xlsx",
             8,
             "IS3025PT24:1986",
+        )
+
+    def test_series_edition_year_does_not_constrain_individual_parts(self):
+        self.assertIsNone(
+            _requested_edition_year(
+                {
+                    "identity": {
+                        "qualifier": "SERIES",
+                        "year": 2026,
+                    }
+                }
+            )
+        )
+        self.assertEqual(
+            _requested_edition_year(
+                {
+                    "identity": {
+                        "qualifier": "PART:6",
+                        "year": 2010,
+                    }
+                }
+            ),
+            2010,
         )
 
     def normalize(self, results):
@@ -312,6 +350,865 @@ class ResolvedEditionReportingTests(unittest.TestCase):
         self.assertEqual(standards, ["IS 3025 PT 99 : 2015"])
 
 
+class NotFoundLifecycleStatusTests(unittest.TestCase):
+    def normalize(self, results):
+        return result_helpers.deduplicate_results(results, _SearchService)
+
+    def test_unmatched_withdrawn_status_is_preserved(self):
+        results = self.normalize(
+            [
+                {
+                    "requested_sdo": "ASME",
+                    "requested_standard": "B18.2.3.5M : 1979",
+                    "matched": False,
+                    "status": "WITHDRAWN",
+                    "status_detail": (
+                        "The requested edition is withdrawn."
+                    ),
+                    "standard": None,
+                    "_source_request_identity": (
+                        "list.xlsx",
+                        3,
+                        "B18.2.3.5M:1979",
+                    ),
+                }
+            ]
+        )
+        self.assertEqual(results[0]["status"], "WITHDRAWN")
+        self.assertEqual(results[0]["not_found_reason"], "Withdrawn")
+
+        workbook = load_workbook(
+            BytesIO(
+                ExportService.export_not_found_excel(results).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+        self.assertEqual(rows[0][2], "WITHDRAWN")
+
+    def test_not_found_label_recovers_historical_from_detail(self):
+        results = self.normalize(
+            [
+                {
+                    "requested_sdo": "ASME",
+                    "requested_standard": "B18.2.3.5M : 1979",
+                    "matched": False,
+                    "status": "NOT FOUND",
+                    "status_detail": (
+                        "Requested edition is marked HISTORICAL in the "
+                        "catalogue and is not available."
+                    ),
+                    "standard": None,
+                    "_source_request_identity": (
+                        "list.xlsx",
+                        4,
+                        "B18.2.3.5M:1979",
+                    ),
+                }
+            ]
+        )
+        self.assertEqual(results[0]["status"], "HISTORICAL")
+        self.assertEqual(results[0]["not_found_reason"], "Historical")
+
+    def test_boilerplate_detail_does_not_fake_withdrawn_status(self):
+        results = self.normalize(
+            [
+                {
+                    "requested_sdo": "IEEE",
+                    "requested_standard": "C57.12.26",
+                    "matched": False,
+                    "status": "NOT FOUND",
+                    "status_detail": (
+                        "No available catalog record was found, and no "
+                        "withdrawn or historical status was identified."
+                    ),
+                    "standard": None,
+                    "_source_request_identity": (
+                        "list.xlsx",
+                        5,
+                        "C57.12.26",
+                    ),
+                }
+            ]
+        )
+        self.assertEqual(results[0]["status"], "NOT FOUND")
+        self.assertEqual(
+            results[0]["not_found_reason"],
+            "Not found in catalog",
+        )
+
+        workbook = load_workbook(
+            BytesIO(
+                ExportService.export_not_found_excel(results).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+        self.assertEqual(rows[0][2], "NOT FOUND")
+
+    def test_unrelated_active_candidate_does_not_hide_withdrawn_status(self):
+        row = {
+            "sdo_name": "ASME",
+            "search_sdo_name": "ASME",
+            "requested_sdo_name": "ASME",
+            "identity": parse_identity("ASME", "B18.2.3.5M"),
+        }
+        withdrawn = SimpleNamespace(
+            id=1,
+            status_id=10,
+            standardno="B18.2.3.5M",
+            display_stdNo="ASME B18.2.3.5M : 1979",
+            standardyear=1979,
+        )
+        unrelated_active = SimpleNamespace(
+            id=2,
+            status_id=1,
+            standardno="B16.5",
+            display_stdNo="ASME B16.5 : 2020",
+            standardyear=2020,
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [unrelated_active, withdrawn],
+            row,
+            {
+                1: {"name": "ACTIVE", "cart_show": 1, "std_show": 1},
+                10: {"name": "WITHDRAWN", "cart_show": 0, "std_show": 0},
+            },
+        )
+        self.assertEqual(row["requested_edition_status"], "WITHDRAWN")
+
+    def test_bis_withdrawn_edition_status_is_recorded(self):
+        row = {
+            "sdo_name": "BIS",
+            "search_sdo_name": "BIS",
+            "requested_sdo_name": "IS",
+            "identity": parse_identity("IS", "IS 1234 : 1990"),
+        }
+        withdrawn = SimpleNamespace(
+            id=9,
+            status_id=3,
+            standardno="IS 1234",
+            display_stdNo="IS 1234 : 1990",
+            standardyear=1990,
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [withdrawn],
+            row,
+            {3: {"name": "WITHDRAWN", "cart_show": 0, "std_show": 0}},
+        )
+        self.assertEqual(row["requested_edition_status"], "WITHDRAWN")
+
+    def test_active_internal_only_duplicate_does_not_hide_historical(self):
+        """Boss Active + internal-only must not block Historical for bare requests."""
+        row = {
+            "sdo_name": "BSI",
+            "search_sdo_name": "BSI",
+            "requested_sdo_name": "BS",
+            "identity": parse_identity("BSI", "BS 6700"),
+        }
+        historical = SimpleNamespace(
+            id="BSI30188215",
+            status_id=3,
+            sdo_id=10,
+            standardno="BS 6700+A1",
+            display_stdNo="BS 6700:2006+A1:2009",
+            standardyear=2006,
+            BSBInternal=1,
+            BSBESales=0,
+            BSBSubscription=1,
+            DocumentAvailability=1,
+        )
+        boss_active_internal = SimpleNamespace(
+            id="BSI-Boss-165099",
+            status_id=1,
+            sdo_id=10,
+            standardno="BS 6700",
+            display_stdNo="BS 6700 : 2006",
+            standardyear=2006,
+            BSBInternal=1,
+            BSBESales=0,
+            BSBSubscription=0,
+            DocumentAvailability=0,
+        )
+        status_map = {
+            1: {"name": "Active", "cart_show": 1, "std_show": 1},
+            3: {"name": "Historical", "cart_show": 0, "std_show": 0},
+        }
+        self.assertFalse(
+            DocumentSearchService._candidate_catalog_visibility(
+                boss_active_internal,
+                status_map,
+            )
+        )
+        DocumentSearchService._record_requested_edition_status(
+            [boss_active_internal, historical],
+            row,
+            status_map,
+        )
+        self.assertEqual(row["requested_edition_status"], "HISTORICAL")
+        preferred = DocumentSearchService._prefer_catalog_visible_candidates(
+            [boss_active_internal, historical],
+            status_map,
+            row,
+        )
+        self.assertTrue(any(c is historical for c in preferred))
+        with use_candidate_status_map(status_map):
+            selected = DocumentSearchService._select_master_candidates(
+                [boss_active_internal, historical],
+                row,
+            )
+        self.assertEqual(len(selected), 1)
+        self.assertIs(selected[0], historical)
+        self.assertEqual(
+            DocumentSearchService._master_result_status(
+                status_map[3],
+                selected[0],
+            ),
+            ("HISTORICAL", False),
+        )
+
+
+class StandardsEPediaExportTests(unittest.TestCase):
+    def test_quotation_and_not_found_include_subscription_flags(self):
+        found = {
+            "requested_sdo": "API",
+            "requested_standard": "API STD 541 : 2014",
+            "matched": True,
+            "status": "AVAILABLE",
+            "bsb_subscription": 1,
+            "parent_status": "Active",
+            "catalog_status": "ACTIVE",
+            "standard": {
+                "Standard_id": "API-STD-541-2014",
+                "sdo_id": 10,
+                "standardno": "API STD 541",
+                "display_stdNo": "API STD 541 : 2014",
+                "title": "Form-Wound Squirrel Cage Induction Motors",
+                "standardyear": 2014,
+                "BSBSubscription": 1,
+                "parent_status": "Active",
+                "enrichment": {
+                    "price": 100,
+                    "currency": "USD",
+                    "year": 2014,
+                    "subscription_available": True,
+                    "classifications": [],
+                },
+            },
+        }
+        not_on_subscription = {
+            "requested_sdo": "IEEE",
+            "requested_standard": "C57.12.26",
+            "matched": False,
+            "status": "NOT FOUND",
+            "bsb_subscription": 0,
+            "parent_status": None,
+            "standard": None,
+            "actions": {"manual_search": True},
+        }
+        withdrawn_on_subscription = {
+            "requested_sdo": "ASME",
+            "requested_standard": "B18.2.3.5M : 1979",
+            "matched": False,
+            "status": "WITHDRAWN",
+            "bsb_subscription": 1,
+            "parent_status": "Withdrawn",
+            "catalog_status": "WITHDRAWN",
+            "standard": None,
+        }
+
+        quotation = load_workbook(
+            BytesIO(
+                ExportService.export_results(
+                    {"results": [found], "grouping": {}}
+                ).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            headers = [
+                cell.value
+                for cell in next(quotation["Quotation"].iter_rows(max_row=1))
+            ]
+            rows = list(
+                quotation["Quotation"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            quotation.close()
+
+        self.assertIn("Standards-e-Pedia", headers)
+        self.assertIn("Catalog Status", headers)
+        self.assertEqual(
+            rows[0][headers.index("Standards-e-Pedia")],
+            "Available",
+        )
+        self.assertEqual(
+            rows[0][headers.index("Catalog Status")],
+            "Active",
+        )
+
+        not_found = load_workbook(
+            BytesIO(
+                ExportService.export_not_found_excel(
+                    [not_on_subscription, withdrawn_on_subscription]
+                ).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            headers = [
+                cell.value
+                for cell in next(not_found["Not Found"].iter_rows(max_row=1))
+            ]
+            rows = list(
+                not_found["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            not_found.close()
+
+        flag_index = headers.index("Standards-e-Pedia")
+        by_standard = {row[1]: row[flag_index] for row in rows}
+        self.assertEqual(by_standard["IEEE C57.12.26"], "Not Available")
+        self.assertEqual(by_standard["ASME B18.2.3.5M : 1979"], "Available")
+        status_index = headers.index("Catalog Status")
+        by_catalog = {row[1]: row[status_index] for row in rows}
+        self.assertEqual(by_catalog["ASME B18.2.3.5M : 1979"], "Withdrawn")
+
+    def test_older_version_available_exports_dedicated_status(self):
+        results = [
+            {
+                "requested_sdo": "API",
+                "requested_standard": "RP 555:2026",
+                "matched": False,
+                "status": "OLDER VERSION AVAILABLE",
+                "status_detail": (
+                    "Requested year 2026 is not in the catalogue; "
+                    "available in older version 2013."
+                ),
+                "not_found_reason": "Older version available",
+                "bsb_subscription": 1,
+                "parent_status": "Active",
+                "standard": None,
+            }
+        ]
+        workbook = load_workbook(
+            BytesIO(ExportService.export_not_found_excel(results).getvalue()),
+            read_only=True,
+        )
+        try:
+            headers = [
+                cell.value
+                for cell in next(workbook["Not Found"].iter_rows(max_row=1))
+            ]
+            rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0][headers.index("Status")],
+            "OLDER VERSION AVAILABLE",
+        )
+
+    def test_subscription_flag_helper_prefers_enrichment_then_fields(self):
+        self.assertEqual(
+            ExportService._standards_e_pedia_flag({"bsb_subscription": 1}),
+            "Available",
+        )
+        self.assertEqual(
+            ExportService._standards_e_pedia_flag(
+                {
+                    "bsb_subscription": 0,
+                    "standard": {"BSBSubscription": 1},
+                }
+            ),
+            "Available",
+        )
+        self.assertEqual(
+            ExportService._standards_e_pedia_flag(
+                {
+                    "bsb_subscription": 0,
+                    "standard": {
+                        "BSBSubscription": 0,
+                        "enrichment": {"subscription_available": True},
+                    },
+                }
+            ),
+            "Available",
+        )
+        self.assertEqual(
+            ExportService._standards_e_pedia_flag({}),
+            "Not Available",
+        )
+
+
+class DuplicateExportSheetTests(unittest.TestCase):
+    def _found(self, requested, matched, year=2018, sdo="IS", standard_id="IS-5001"):
+        return {
+            "requested_sdo": sdo,
+            "requested_standard": requested,
+            "matched": True,
+            "status": "AVAILABLE",
+            "bsb_subscription": 1,
+            "parent_status": "Active",
+            "catalog_status": "Reaffirmed",
+            "standard": {
+                "Standard_id": standard_id,
+                "sdo_id": 7,
+                "standardno": "IS 5001",
+                "display_stdNo": matched,
+                "standardyear": year,
+                "BSBSubscription": 1,
+                "parent_status": "Active",
+                "enrichment": {"year": year, "subscription_available": True},
+            },
+        }
+
+    def test_duplicate_matched_standards_appear_on_duplicates_sheet(self):
+        matched = "IS 5001 : 2018(IEC 60191-1 : 2007)"
+        results = [
+            self._found("IS 5001 2018", matched),
+            self._found(
+                "IS 5001 : 2018(IEC 60191-1 : 2007)",
+                matched,
+            ),
+            self._found("IS 5001 01-Feb 1973", matched),
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "C57.12.26",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+            },
+            self._found(
+                "API STD 541",
+                "API STD 541 : 2014",
+                year=2014,
+                sdo="API",
+                standard_id="API-STD-541",
+            ),
+        ]
+
+        workbook = load_workbook(
+            BytesIO(ExportService.export_not_found_excel(results).getvalue()),
+            read_only=True,
+        )
+        try:
+            self.assertEqual(
+                workbook.sheetnames,
+                ["Not Found", "Duplicates"],
+            )
+            not_found_rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+            duplicate_headers = [
+                cell.value
+                for cell in next(workbook["Duplicates"].iter_rows(max_row=1))
+            ]
+            duplicate_rows = list(
+                workbook["Duplicates"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+
+        self.assertEqual(len(not_found_rows), 1)
+        self.assertEqual(not_found_rows[0][1], "IEEE C57.12.26")
+        self.assertEqual(
+            duplicate_headers,
+            ExportService.DUPLICATE_COLUMNS,
+        )
+        self.assertEqual(len(duplicate_rows), 3)
+        requested = {
+            row[duplicate_headers.index("Requested Standard")]
+            for row in duplicate_rows
+        }
+        self.assertEqual(
+            requested,
+            {
+                "IS 5001 2018",
+                "IS 5001 : 2018(IEC 60191-1 : 2007)",
+                "IS 5001 01-Feb 1973",
+            },
+        )
+        groups = {
+            row[duplicate_headers.index("Group")]
+            for row in duplicate_rows
+        }
+        self.assertEqual(groups, {1})
+        for row in duplicate_rows:
+            self.assertEqual(
+                row[duplicate_headers.index("Matched Standard")],
+                matched,
+            )
+            self.assertEqual(
+                row[duplicate_headers.index("Status")],
+                "AVAILABLE",
+            )
+            self.assertEqual(
+                row[duplicate_headers.index("Duplicate Count")],
+                3,
+            )
+            self.assertEqual(
+                row[duplicate_headers.index("Standards-e-Pedia")],
+                "Available",
+            )
+
+    def test_duplicate_not_found_standards_appear_on_duplicates_sheet(self):
+        results = [
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "C57.12.26",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+            },
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "IEEE C57.12.26",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+            },
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "IEEE C2 ERTA",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+                "source_row_identity": ["ieee.xlsx", 10, "IEEEC2ERTA"],
+            },
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "IEEE C2 ERTA",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+                "source_row_identity": ["ieee.xlsx", 11, "IEEEC2ERTA"],
+            },
+            {
+                "requested_sdo": "NEMA",
+                "requested_standard": "BI 50093",
+                "matched": False,
+                "status": "NOT FOUND",
+                "standard": None,
+            },
+            {
+                "requested_sdo": "ASME",
+                "requested_standard": "B18.2.3.5M : 1979",
+                "matched": False,
+                "status": "WITHDRAWN",
+                "standard": None,
+            },
+            {
+                "requested_sdo": "ASME",
+                "requested_standard": "ASME B18.2.3.5M : 1979",
+                "matched": False,
+                "status": "WITHDRAWN",
+                "standard": None,
+            },
+        ]
+        workbook = load_workbook(
+            BytesIO(ExportService.export_not_found_excel(results).getvalue()),
+            read_only=True,
+        )
+        try:
+            not_found_rows = list(
+                workbook["Not Found"].iter_rows(min_row=2, values_only=True)
+            )
+            headers = [
+                cell.value
+                for cell in next(workbook["Duplicates"].iter_rows(max_row=1))
+            ]
+            duplicate_rows = list(
+                workbook["Duplicates"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+
+        # Not Found keeps one row per duplicate group; Duplicates keeps all.
+        self.assertEqual(len(not_found_rows), 4)
+        not_found_standards = {row[1] for row in not_found_rows}
+        self.assertEqual(
+            not_found_standards,
+            {
+                "IEEE C57.12.26",
+                "IEEE C2 ERTA",
+                "NEMA BI 50093",
+                "ASME B18.2.3.5M : 1979",
+            },
+        )
+        self.assertEqual(len(duplicate_rows), 6)
+        by_request = {}
+        by_group = {}
+        for row in duplicate_rows:
+            requested = row[headers.index("Requested Standard")]
+            group = row[headers.index("Group")]
+            by_request.setdefault(requested, []).append(
+                row[headers.index("Status")]
+            )
+            by_group.setdefault(group, []).append(requested)
+            self.assertIsNone(row[headers.index("Matched Standard")])
+            self.assertEqual(row[headers.index("Duplicate Count")], 2)
+        self.assertEqual(len(by_request["IEEE C57.12.26"]), 2)
+        self.assertEqual(len(by_request["IEEE C2 ERTA"]), 2)
+        self.assertEqual(len(by_request["ASME B18.2.3.5M : 1979"]), 2)
+        self.assertNotIn("NEMA BI 50093", by_request)
+        self.assertEqual(len(by_group), 3)
+        # Related duplicates must sit in contiguous Group blocks.
+        group_sequence = [
+            row[headers.index("Group")] for row in duplicate_rows
+        ]
+        self.assertEqual(
+            group_sequence,
+            sorted(group_sequence, key=lambda value: (value,)),
+        )
+        for group, requested_values in by_group.items():
+            self.assertEqual(len(requested_values), 2)
+
+    def test_found_list_keeps_one_row_per_duplicate_group(self):
+        matched = "IS 5001 : 2018(IEC 60191-1 : 2007)"
+        results = [
+            self._found("IS 5001 2018", matched),
+            self._found(
+                "IS 5001 : 2018(IEC 60191-1 : 2007)",
+                matched,
+            ),
+            self._found("IS 5001 01-Feb 1973", matched),
+            self._found(
+                "API STD 541",
+                "API STD 541 : 2014",
+                year=2014,
+                sdo="API",
+                standard_id="API-STD-541",
+            ),
+        ]
+        quotation = load_workbook(
+            BytesIO(
+                ExportService.export_results(
+                    {"results": results}
+                ).getvalue()
+            ),
+            read_only=True,
+        )
+        try:
+            headers = [
+                cell.value
+                for cell in next(quotation["Quotation"].iter_rows(max_row=1))
+            ]
+            rows = list(
+                quotation["Quotation"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            quotation.close()
+
+        matched_values = {
+            row[headers.index("Matched Standard")] for row in rows
+        }
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            matched_values,
+            {matched, "API STD 541 : 2014"},
+        )
+
+    def test_export_preparation_keeps_distinct_source_duplicates(self):
+        from app.services.export_preparation import expand_series_export_rows
+
+        results = [
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "IEEE C2 ERTA",
+                "matched": False,
+                "status": "NOT FOUND",
+                "status_detail": "missing",
+                "standard": None,
+                "source_row_identity": ["ieee.xlsx", 1, "IEEEC2ERTA"],
+                "_seriesExpanded": True,
+            },
+            {
+                "requested_sdo": "IEEE",
+                "requested_standard": "IEEE C2 ERTA",
+                "matched": False,
+                "status": "NOT FOUND",
+                "status_detail": "missing",
+                "standard": None,
+                "source_row_identity": ["ieee.xlsx", 2, "IEEEC2ERTA"],
+                "_seriesExpanded": True,
+            },
+        ]
+        kept = expand_series_export_rows(results, db=None)
+        self.assertEqual(len(kept), 2)
+        dup_rows = ExportService._duplicate_export_rows(kept)
+        self.assertEqual(len(dup_rows), 2)
+        self.assertEqual(dup_rows[0]["Requested Standard"], "IEEE C2 ERTA")
+        self.assertEqual(dup_rows[0]["Duplicate Count"], 2)
+        self.assertEqual(dup_rows[0]["Group"], 1)
+        self.assertEqual(dup_rows[1]["Group"], 1)
+
+    def test_duplicate_rows_are_grouped_together_by_identity(self):
+        results = [
+            self._found(
+                "API 5L",
+                "API SPEC 5L : 2026",
+                year=2026,
+                sdo="API",
+                standard_id="API-5L",
+            ),
+            self._found(
+                "ASME B16.11",
+                "ASME B16.11 : 2021",
+                year=2021,
+                sdo="ASME",
+                standard_id="ASME-B16.11",
+            ),
+            self._found(
+                "API SPEC 5L",
+                "API SPEC 5L : 2026",
+                year=2026,
+                sdo="API",
+                standard_id="API-5L",
+            ),
+            self._found(
+                "ASME B 16.11",
+                "ASME B16.11 : 2021",
+                year=2021,
+                sdo="ASME",
+                standard_id="ASME-B16.11",
+            ),
+        ]
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(len(dup_rows), 4)
+        self.assertEqual(
+            [row["Group"] for row in dup_rows],
+            [1, 1, 2, 2],
+        )
+        group_one = [
+            row["Requested Standard"]
+            for row in dup_rows
+            if row["Group"] == 1
+        ]
+        group_two = [
+            row["Requested Standard"]
+            for row in dup_rows
+            if row["Group"] == 2
+        ]
+        self.assertEqual(set(group_one), {"API 5L", "API SPEC 5L"})
+        self.assertEqual(set(group_two), {"ASME B16.11", "ASME B 16.11"})
+
+    def test_series_expansion_is_not_listed_as_duplicates(self):
+        results = [
+            {
+                **self._found(
+                    "IEC 62305:2025 SER (EN-FR)",
+                    f"IEC 62305-{part}:2024 (EN-FR)",
+                    year=2024,
+                    sdo="IEC",
+                    standard_id=f"IEC-62305-{part}",
+                ),
+                "_seriesExpanded": True,
+            }
+            for part in (1, 2, 3, 4)
+        ]
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(dup_rows, [])
+        unique = ExportService._unique_export_results(results)
+        self.assertEqual(len(unique), 4)
+
+    def test_part_range_expansion_is_not_listed_as_duplicates(self):
+        results = [
+            self._found(
+                "IEC 60034 (Pt 1-30)",
+                f"IEC 60034-{part}:2020 (EN-FR)",
+                year=2020,
+                sdo="IEC",
+                standard_id=f"IEC-60034-{part}",
+            )
+            for part in (1, 2, 3, 11, 12, 30)
+        ]
+        self.assertTrue(
+            ExportService._request_looks_like_series(results[0])
+        )
+        dup_rows = ExportService._duplicate_export_rows(results)
+        self.assertEqual(dup_rows, [])
+        unique = ExportService._unique_export_results(results)
+        self.assertEqual(len(unique), 6)
+
+    def test_unique_found_standards_do_not_fill_duplicates_sheet(self):
+        results = [
+            self._found(
+                "API STD 541",
+                "API STD 541 : 2014",
+                year=2014,
+                sdo="API",
+                standard_id="API-STD-541",
+            ),
+            self._found(
+                "IS 5001 2018",
+                "IS 5001 : 2018(IEC 60191-1 : 2007)",
+            ),
+        ]
+        workbook = load_workbook(
+            BytesIO(ExportService.export_not_found_excel(results).getvalue()),
+            read_only=True,
+        )
+        try:
+            duplicate_rows = list(
+                workbook["Duplicates"].iter_rows(min_row=2, values_only=True)
+            )
+        finally:
+            workbook.close()
+        self.assertEqual(duplicate_rows, [])
+
+
+class IeeeIecDualLogoLookupTests(unittest.TestCase):
+    def test_hyphenated_ieee_lookup_keeps_catalogue_spelling(self):
+        self.assertEqual(
+            identity_lookup_core_tokens("IEEE", "60076-57", "PART:1202"),
+            ["60076-57"],
+        )
+        self.assertTrue(
+            designation_is_ieee_iec_dual_logo(
+                "IEC/IEEE 60076-57-1202:2017 (EN-FR)"
+            )
+        )
+        self.assertFalse(
+            designation_is_ieee_iec_dual_logo("IEEE C57.12.00-2021")
+        )
+        self.assertTrue(ieee_iec_joint_prefix("IEEE", "IEC/IEEE"))
+        self.assertTrue(ieee_iec_joint_prefix("IEC", "IEEE/IEC"))
+        self.assertFalse(ieee_iec_joint_prefix("ISO", "IEC/IEEE"))
+
+    def test_dual_logo_rows_are_indexed_for_the_other_publisher(self):
+        candidate = SimpleNamespace(
+            id=274355,
+            sdo_id=16,
+            display_stdNo="IEC/IEEE 60076-57-1202:2017 (EN-FR)",
+            standardno="IEC/IEEE 60076-57-1202 (EN-FR)",
+        )
+        index = build_identity_candidate_index(
+            [candidate],
+            [
+                {
+                    "sdo_id": 25,
+                    "sdo_name": "IEEE",
+                    "search_sdo_name": "IEEE",
+                }
+            ],
+        )
+        self.assertIn(candidate.id, index[(16, "IEEE", "6007657")])
+
+
 class CommitteeCodeDisplayTests(unittest.TestCase):
     def test_publishers_show_full_codes_without_titles(self):
         self.assertEqual(
@@ -372,7 +1269,23 @@ class CommitteeCodeDisplayTests(unittest.TestCase):
                 "Pipelines & Tanks (SC 15)",
                 "AMPP-NACE",
             ),
-            ["15"],
+            ["SC 15"],
+        )
+        self.assertEqual(
+            committee_display_codes(
+                "10",
+                "Asset Integrity Management (SC 10)",
+                "NACE",
+            ),
+            ["SC 10"],
+        )
+        self.assertEqual(
+            committee_display_codes(
+                "",
+                "Asset Integrity Management (SC 10) (SC 11)",
+                "NACE",
+            ),
+            ["SC 10", "SC 11"],
         )
 
 

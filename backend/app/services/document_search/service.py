@@ -5,6 +5,7 @@ import time
 
 logger = logging.getLogger(__name__)
 
+from app.core.standard_identity import split_publisher_dual_designation
 from app.repositories.enrichment_repository import EnrichmentRepository
 from app.repositories.standards_repository import StandardsRepository
 from app.services.document_search import input_preparation
@@ -65,6 +66,17 @@ class DocumentSearchService(DocumentSearchServiceMethods):
                     displaystdno,
                 )
             )
+            publisher_dual = split_publisher_dual_designation(
+                sdo_name,
+                displaystdno,
+            )
+            if publisher_dual:
+                for dual_sdo in (
+                    publisher_dual.get("chosen_sdo"),
+                    publisher_dual.get("alternate_sdo"),
+                ):
+                    if dual_sdo and str(dual_sdo).strip():
+                        sdo_names.append(str(dual_sdo).strip())
 
         sdo_map = self.resolve_sdo_ids(
             sdo_names,
