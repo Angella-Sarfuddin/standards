@@ -4,12 +4,14 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from app.api.document_routes import router as document_router
 from app.api.excel_routes import router as excel_router
 from app.api.export_routes import router as export_router
 from app.api.standards_routes import router as standards_router
+from app.database.database import engine
 
 logger = logging.getLogger("app")
 
@@ -51,6 +53,27 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "All Are Well"}
+
+
+@app.get("/health/db")
+async def health_db():
+    """Liveness for the catalogue DB used by search/export routes."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "reachable"}
+    except OperationalError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+                "database": "unreachable",
+                "detail": (
+                    "Cannot reach DATABASE_URL. Connect VPN or allow this "
+                    "machine in the DB security group, then retry."
+                ),
+            },
+        )
 
 
 @app.exception_handler(OperationalError)

@@ -28,6 +28,8 @@ engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_recycle=1800,
+    # Fail fast when the catalogue host is unreachable (VPN / security group).
+    connect_args={"connect_timeout": 5},
 )
 
 SessionLocal = sessionmaker(
