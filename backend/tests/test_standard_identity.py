@@ -1298,6 +1298,9 @@ class StandardIdentityTests(unittest.TestCase):
                 self.display_calls = 0
                 self.standard_calls = 0
 
+            def _identity_search_sdo_ids(self, sdo_id, sdo_prefix):
+                return (sdo_id,)
+
             def search_master_by_sdo_and_display_variants(self, pairs):
                 self.display_calls += 1
                 return [
