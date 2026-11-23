@@ -1,0 +1,14 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: standards-backend:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    # Reach MySQL (or other services) running on the Windows/macOS host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
