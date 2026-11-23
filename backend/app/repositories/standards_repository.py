@@ -1,7 +1,3 @@
-import threading
-import time
-import weakref
-
 from sqlalchemy import or_
 
 from app.repositories.identity_lookup import (
@@ -12,7 +8,9 @@ from app.repositories.identity_lookup import (
     keep_rows_containing_core,
     unique_rows_by_id,
 )
+from app.repositories.query_columns import standard_search_options
 from app.core.db_retry import run_with_retry
+from app.core.ttl_cache import BindTtlCache
 
 from app.models.standard import Standard
 from app.models.sdo import SDO
@@ -22,9 +20,7 @@ from app.core.standard_identity import (
 )
 
 
-_SDO_ROWS_CACHE_TTL_SECONDS = 60
-_sdo_rows_cache = weakref.WeakKeyDictionary()
-_sdo_rows_cache_lock = threading.Lock()
+_SDO_ROWS_CACHE = BindTtlCache(ttl_seconds=60)
 
 
 class StandardsRepository:
@@ -32,13 +28,20 @@ class StandardsRepository:
     def __init__(self, db):
         self.db = db
 
+    def _standard_query(self):
+        return self.db.query(Standard).options(standard_search_options())
+
+    def _session_bind(self):
+        get_bind = getattr(self.db, "get_bind", None)
+        return get_bind() if callable(get_bind) else None
+
     # ==========================================
     # BASIC STANDARD SEARCH
     # ==========================================
 
     def search_by_display_number(self, display_number: str):
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.display_stdNo == display_number
             )
@@ -47,7 +50,7 @@ class StandardsRepository:
 
     def search_by_normalized_number(self, normalized_number: str):
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.stdNo_normalized == normalized_number
             )
@@ -56,7 +59,7 @@ class StandardsRepository:
 
     def search_by_standard_number(self, standard_number: str):
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.standardno == standard_number
             )
@@ -72,7 +75,7 @@ class StandardsRepository:
             return []
 
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.display_stdNo.in_(display_numbers)
             )
@@ -87,7 +90,7 @@ class StandardsRepository:
             return []
 
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.stdNo_normalized.in_(normalized_numbers)
             )
@@ -102,7 +105,7 @@ class StandardsRepository:
             return []
 
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.standardno.in_(standard_numbers)
             )
@@ -119,7 +122,7 @@ class StandardsRepository:
         display_number: str
     ):
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.sdo_id == sdo_id,
                 Standard.display_stdNo == display_number
@@ -169,7 +172,7 @@ class StandardsRepository:
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
-                        self.db.query(Standard)
+                        self._standard_query()
                         .filter(
                             Standard.sdo_id == sdo_id,
                             Standard.display_stdNo.in_(batch),
@@ -178,6 +181,56 @@ class StandardsRepository:
                 results.extend(unique_rows_by_id(rows, seen))
 
         return results
+
+    def search_by_sdo_display_and_standard_numbers(self, pairs):
+        """One round trip covering display_stdNo and standardno IN lookups.
+
+        Splits rows the same way separate display and standard-number queries
+        would, so lookup indexes and match logic stay unchanged.
+        """
+        if not pairs:
+            return [], []
+
+        grouped = {}
+        for sdo_id, value in pairs:
+            if not sdo_id or not value:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            grouped.setdefault(int(sdo_id), set()).add(text)
+
+        exact_results = []
+        standard_number_results = []
+        exact_seen = set()
+        standard_seen = set()
+
+        for sdo_id, values in grouped.items():
+            for batch in iter_batches(values, IN_BATCH_SIZE):
+                batch_set = set(batch)
+                rows = run_with_retry(
+                    self.db,
+                    lambda sdo_id=sdo_id, batch=batch:
+                        self._standard_query()
+                        .filter(
+                            Standard.sdo_id == sdo_id,
+                            or_(
+                                Standard.display_stdNo.in_(batch),
+                                Standard.standardno.in_(batch),
+                            ),
+                        ),
+                )
+                for row in rows:
+                    display = str(row.display_stdNo or "").strip()
+                    standardno = str(row.standardno or "").strip()
+                    if display in batch_set and row.id not in exact_seen:
+                        exact_seen.add(row.id)
+                        exact_results.append(row)
+                    if standardno in batch_set and row.id not in standard_seen:
+                        standard_seen.add(row.id)
+                        standard_number_results.append(row)
+
+        return exact_results, standard_number_results
 
     # ==========================================
     # SDO + IDENTITY HINTS
@@ -228,6 +281,8 @@ class StandardsRepository:
         if not grouped:
             return []
 
+        # Always use the request session so candidates stay attached and match
+        # selection can read loaded columns without re-querying after close().
         results = []
         seen = set()
         text_columns = ("display_stdNo", "standardno")
@@ -246,6 +301,7 @@ class StandardsRepository:
                 ),
                 fulltext_column=Standard.display_stdNo,
                 normalized_column=Standard.stdNo_normalized,
+                query_options=standard_search_options(),
             )
             results.extend(
                 keep_rows_containing_core(
@@ -273,7 +329,7 @@ class StandardsRepository:
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, filters=filters: (
-                        self.db.query(Standard)
+                        self._standard_query()
                         .filter(
                             Standard.sdo_id == sdo_id,
                             or_(*filters),
@@ -300,7 +356,7 @@ class StandardsRepository:
             return []
 
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.Standard_id.in_(standard_ids)
             )
@@ -408,32 +464,8 @@ class StandardsRepository:
         # SDO names and aliases change infrequently. Reuse the small active
         # SDO table snapshot briefly so repeated one-row searches do not pay
         # for a database round trip each time.
-        get_bind = getattr(self.db, "get_bind", None)
-        bind = get_bind() if callable(get_bind) else None
-        rows = None
-        if bind is not None:
-            now = time.monotonic()
-            with _sdo_rows_cache_lock:
-                cached = _sdo_rows_cache.get(bind)
-                if cached and now - cached[0] < _SDO_ROWS_CACHE_TTL_SECONDS:
-                    rows = cached[1]
-                else:
-                    rows = run_with_retry(
-                        self.db,
-                        lambda: self.db.query(
-                            SDO.id,
-                            SDO.sdo_title,
-                            SDO.sdo_fullname,
-                            SDO.sdo_shortdesc,
-                            SDO.designation,
-                        ).filter(SDO.status == 1),
-                    )
-                    _sdo_rows_cache[bind] = (now, rows)
-
-        if rows is None:
-            # Lightweight test doubles and nonstandard sessions without a
-            # stable bind keep the uncached query behavior.
-            rows = run_with_retry(
+        def _load_sdo_rows():
+            return run_with_retry(
                 self.db,
                 lambda: self.db.query(
                     SDO.id,
@@ -443,6 +475,8 @@ class StandardsRepository:
                     SDO.designation,
                 ).filter(SDO.status == 1),
             )
+
+        rows = _SDO_ROWS_CACHE.get_or_load(self._session_bind(), _load_sdo_rows)
 
         matches = []
 
@@ -471,7 +505,7 @@ class StandardsRepository:
             return []
 
         return (
-            self.db.query(Standard)
+            self._standard_query()
             .filter(
                 Standard.id.in_(ids)
             )
@@ -514,36 +548,17 @@ class StandardsRepository:
         seen = set()
 
         for sdo_id, values in grouped.items():
-
-            values = list(values)
-
-            for start in range(
-                0,
-                len(values),
-                400
-            ):
-
-                batch = values[
-                    start:start + 400
-                ]
-
+            for batch in iter_batches(values, IN_BATCH_SIZE):
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
-                        self.db.query(Standard)
+                        self._standard_query()
                         .filter(
                             Standard.sdo_id == sdo_id,
                             Standard.stdNo_normalized.in_(batch),
                         ),
                 )
-
-                for row in rows:
-
-                    if row.id in seen:
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(unique_rows_by_id(rows, seen))
 
         return results
 
@@ -583,35 +598,16 @@ class StandardsRepository:
         seen = set()
 
         for sdo_id, values in grouped.items():
-
-            values = list(values)
-
-            for start in range(
-                0,
-                len(values),
-                400
-            ):
-
-                batch = values[
-                    start:start + 400
-                ]
-
+            for batch in iter_batches(values, IN_BATCH_SIZE):
                 rows = run_with_retry(
                     self.db,
                     lambda sdo_id=sdo_id, batch=batch:
-                        self.db.query(Standard)
+                        self._standard_query()
                         .filter(
                             Standard.sdo_id == sdo_id,
                             Standard.standardno.in_(batch),
                         ),
                 )
-
-                for row in rows:
-
-                    if row.id in seen:
-                        continue
-
-                    seen.add(row.id)
-                    results.append(row)
+                results.extend(unique_rows_by_id(rows, seen))
 
         return results

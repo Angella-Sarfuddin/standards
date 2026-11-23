@@ -22,10 +22,18 @@ from app.core.standard_identity import (
     identity_indexable_like_patterns,
 )
 
-IN_BATCH_SIZE = 400
+IN_BATCH_SIZE = 500
+# Keep bound LIKE OR-trees small; larger batches can slow MySQL more than
+# they save round trips. Python still filters with identity_core_appears.
 BOUND_PATTERN_BATCH = 5
-LIKE_BATCH_SIZE = 200
-FULLTEXT_CORE_BATCH = 200
+# Smaller statement batches finish faster and are less likely to hit MySQL
+# lost-connection (2013) on large multi-SDO identity passes.
+LIKE_BATCH_SIZE = 40
+FULLTEXT_CORE_BATCH = 25
+# Containment cores processed per prefix/fulltext pass inside one SDO.
+CORE_FETCH_BATCH = 30
+# Leading-wildcard literal fallbacks are expensive; keep OR trees tiny.
+LITERAL_CORE_BATCH = 8
 
 
 def iter_batches(values: Iterable[Any], size: int) -> Iterator[list[Any]]:
@@ -87,6 +95,7 @@ def fetch_long_core_candidates(
     fulltext_column: Any,
     normalized_column: Any = None,
     extra_filters: tuple = (),
+    query_options=None,
 ) -> list[Any]:
     """Return catalogue rows that might contain one of ``cores``.
 
@@ -97,37 +106,43 @@ def fetch_long_core_candidates(
     if not cores:
         return []
 
-    rows = prefix_index_candidates(
-        db,
-        model=model,
-        sdo_id=sdo_id,
-        cores=cores,
-        sdo_prefixes=sdo_prefixes,
-        text_columns=text_columns,
-        normalized_column=normalized_column,
-        extra_filters=extra_filters,
-    )
-    missing = [
-        core
-        for core in cores
-        if not row_contains_core(rows, core, text_columns, normalized_column)
-    ]
     seen: set = set()
-    unique = unique_rows_by_id(rows, seen)
-    if missing:
-        unique.extend(
-            unique_rows_by_id(
-                fulltext_candidates(
-                    db,
-                    model=model,
-                    sdo_id=sdo_id,
-                    cores=missing,
-                    fulltext_column=fulltext_column,
-                    extra_filters=extra_filters,
-                ),
-                seen,
-            )
+    unique: list[Any] = []
+    for core_batch in iter_batches(cores, CORE_FETCH_BATCH):
+        rows = prefix_index_candidates(
+            db,
+            model=model,
+            sdo_id=sdo_id,
+            cores=core_batch,
+            sdo_prefixes=sdo_prefixes,
+            text_columns=text_columns,
+            normalized_column=normalized_column,
+            extra_filters=extra_filters,
+            query_options=query_options,
         )
+        missing = [
+            core
+            for core in core_batch
+            if not row_contains_core(
+                rows, core, text_columns, normalized_column
+            )
+        ]
+        unique.extend(unique_rows_by_id(rows, seen))
+        if missing:
+            unique.extend(
+                unique_rows_by_id(
+                    fulltext_candidates(
+                        db,
+                        model=model,
+                        sdo_id=sdo_id,
+                        cores=missing,
+                        fulltext_column=fulltext_column,
+                        extra_filters=extra_filters,
+                        query_options=query_options,
+                    ),
+                    seen,
+                )
+            )
     return unique
 
 
@@ -153,9 +168,11 @@ def prefix_index_candidates(
     text_columns,
     normalized_column,
     extra_filters,
+    query_options=None,
 ):
     pending_likes = []
     rows = []
+    options = (query_options,) if query_options is not None else ()
 
     def run():
         if not pending_likes:
@@ -167,6 +184,7 @@ def prefix_index_candidates(
                 db,
                 lambda likes=likes: (
                     db.query(model)
+                    .options(*options)
                     .filter(
                         model.sdo_id == sdo_id,
                         or_(*likes),
@@ -204,8 +222,10 @@ def fulltext_candidates(
     cores,
     fulltext_column,
     extra_filters,
+    query_options=None,
 ):
     rows = []
+    options = (query_options,) if query_options is not None else ()
     for batch in iter_batches(cores, FULLTEXT_CORE_BATCH):
         terms = []
         for core in batch:
@@ -219,6 +239,7 @@ def fulltext_candidates(
                 db,
                 lambda against=against: (
                     db.query(model)
+                    .options(*options)
                     .filter(
                         model.sdo_id == sdo_id,
                         match(

@@ -24,11 +24,24 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set in the project .env file")
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=1800,
-)
+# Identity discovery can fan out a few concurrent SDO lookups; keep enough
+# pooled connections for that without leaving stale sockets around.
+_engine_kwargs = {
+    "pool_pre_ping": True,
+    "pool_recycle": 1800,
+    "pool_size": 10,
+    "max_overflow": 20,
+}
+if DATABASE_URL and DATABASE_URL.startswith("mysql"):
+    # Avoid client-side drops during long catalogue scans; query chunking
+    # keeps individual statements shorter than this ceiling.
+    _engine_kwargs["connect_args"] = {
+        "connect_timeout": 15,
+        "read_timeout": 300,
+        "write_timeout": 120,
+    }
+
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 SessionLocal = sessionmaker(
     autocommit=False,

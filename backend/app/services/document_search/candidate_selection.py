@@ -142,6 +142,74 @@ def _select_series_candidates(candidates, row, status_map=None, *, service_class
         ),
     )
 
+def _select_api_year_locked_parts(
+    candidates,
+    row,
+    status_map=None,
+    *,
+    service_class,
+    master=False,
+):
+    """Bare API + explicit year → only part editions from that year (option A).
+
+    Additive fallback when the catalogue stores ``554-1`` / ``554-2`` instead of
+    a base ``554:year``. Does not loosen global ``identity_matches``.
+    """
+    if not service_class._is_api_request(row):
+        return []
+    identity = row.get("identity") or {}
+    if identity.get("qualifier") or identity.get("family_lookup"):
+        return []
+    requested_year = identity.get("year")
+    if requested_year is None:
+        return []
+    try:
+        requested_year = int(requested_year)
+    except (TypeError, ValueError):
+        return []
+
+    sdo_name = row.get("search_sdo_name") or row.get("sdo_name")
+    part_candidates = []
+    for candidate in service_class._unique_standards(candidates):
+        if service_class._candidate_should_be_excluded(candidate):
+            continue
+        if not service_class._candidate_is_part_of_root(candidate, row):
+            continue
+        year = service_class._candidate_year(candidate, sdo_name)
+        if year is None:
+            continue
+        try:
+            if int(year) != requested_year:
+                continue
+        except (TypeError, ValueError):
+            continue
+        part_candidates.append(candidate)
+
+    if not part_candidates:
+        return []
+
+    # Nested family selection among year-filtered parts only. Clear year so
+    # this helper does not re-enter; keep family_lookup so PART rows match.
+    family_row = {
+        **row,
+        "identity": {
+            **identity,
+            "family_lookup": True,
+            "qualifier": "PART",
+            "year": None,
+        },
+    }
+    if master:
+        return service_class._select_master_candidates(
+            part_candidates,
+            family_row,
+        )
+    return service_class._select_candidates(
+        part_candidates,
+        family_row,
+    )
+
+
 def _select_candidates(candidates, row, status_map=None, *, service_class):
     service_class._record_requested_edition_status(
         candidates,
@@ -171,6 +239,15 @@ def _select_candidates(candidates, row, status_map=None, *, service_class):
     )
     if not candidates:
         return []
+    year_locked_parts = _select_api_year_locked_parts(
+        candidates,
+        row,
+        status_map,
+        service_class=service_class,
+        master=False,
+    )
+    if year_locked_parts:
+        return year_locked_parts
     selected = None
     api_family_request = (
         service_class._is_api_request(row)
@@ -501,6 +578,15 @@ def _select_master_candidates(candidates, row, status_map=None, *, service_class
         ]
         if active_candidates:
             candidates = active_candidates
+    year_locked_parts = _select_api_year_locked_parts(
+        candidates,
+        row,
+        status_map,
+        service_class=service_class,
+        master=True,
+    )
+    if year_locked_parts:
+        return year_locked_parts
     if not service_class._is_bare_qualifier_request(row):
         root_candidates = [
             candidate

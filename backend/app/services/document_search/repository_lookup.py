@@ -147,6 +147,9 @@ def lookup_number_candidates(
     exact_pairs = list(dict.fromkeys(exact_pairs))
     normalized_pairs = list(dict.fromkeys(normalized_pairs))
 
+    # Keep display and standard-number as separate indexed IN lookups.
+    # A single OR across both columns often prevents MySQL from using the
+    # per-column indexes and can be slower on large batches.
     exact_results = repository.search_by_sdo_and_display_numbers(exact_pairs)
     normalized_results = repository.search_by_sdo_and_normalized_numbers(
         normalized_pairs
