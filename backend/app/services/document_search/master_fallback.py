@@ -16,21 +16,28 @@ from app.core.standard_identity import (
 )
 
 
-def _row_search_sdo_ids(enrichment_repository, row):
+def _row_search_sdo_ids(enrichment_repository, row, cache=None):
     """Catalogue owners searched for one request in a single pass.
 
     IEEE and IEC dual-logo rows are stored under either owner. Include the
     alias owner here so display and identity lookups do not need a second
     waterfall search.
     """
+    cache_key = row.get("request_key")
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
     search_sdo_name = row.get("search_sdo_name") or row.get("sdo_name")
-    return enrichment_repository._identity_search_sdo_ids(
+    result = enrichment_repository._identity_search_sdo_ids(
         row.get("sdo_id"),
         identity_pattern_prefix(
             search_sdo_name,
             (row.get("identity") or {}).get("identifier_prefix"),
         ),
     )
+    if cache is not None and cache_key is not None:
+        cache[cache_key] = result
+    return result
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +58,9 @@ def find_master_matches(
     if not unresolved_rows:
         return {}
 
+    # One alias-owner resolution per request row for the whole fallback path.
+    row_sdo_ids_cache = {}
+
     # --------------------------------------------------------
     # Display-number candidates
     # --------------------------------------------------------
@@ -58,7 +68,11 @@ def find_master_matches(
     pairs = []
 
     for row in unresolved_rows:
-        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
+        search_sdo_ids = _row_search_sdo_ids(
+            enrichment_repository,
+            row,
+            row_sdo_ids_cache,
+        )
 
         for variant in row[
             "identity"
@@ -107,7 +121,11 @@ def find_master_matches(
     for row in unresolved_rows:
         full = row.get("full_display_number")
         if full:
-            for search_sdo_id in _row_search_sdo_ids(enrichment_repository, row):
+            for search_sdo_id in _row_search_sdo_ids(
+                enrichment_repository,
+                row,
+                row_sdo_ids_cache,
+            ):
                 standard_pairs.append((search_sdo_id, full))
         alternate = row.get("publisher_dual_alternate") or {}
         alt_sdo_id = alternate.get("sdo_id")
@@ -186,7 +204,11 @@ def find_master_matches(
 
     for row in unresolved_rows:
         row_masters = []
-        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
+        search_sdo_ids = _row_search_sdo_ids(
+            enrichment_repository,
+            row,
+            row_sdo_ids_cache,
+        )
         for token in variant_tokens(row):
             for search_sdo_id in search_sdo_ids:
                 row_masters.extend(
@@ -315,6 +337,9 @@ def find_master_matches(
     # Group master candidates
     # --------------------------------------------------------
 
+    stage_started = time.perf_counter()
+    masters = unique_standards(masters)
+
     grouped = {}
 
     for master in masters:
@@ -331,11 +356,17 @@ def find_master_matches(
                 ),
                 [],
             ).append(master)
+    logger.info(
+        f"[SEARCH TIMING] Master candidate grouping: "
+        f"{time.perf_counter() - stage_started:.3f}s | "
+        f"masters={len(masters)}"
+    )
 
     # --------------------------------------------------------
     # Select master for each unresolved row
     # --------------------------------------------------------
 
+    stage_started = time.perf_counter()
     joint_nace_rows = {}
     for row in unresolved_rows:
         nace_number = nace_publication_number(
@@ -367,13 +398,24 @@ def find_master_matches(
                 joint_status_ids
             )
         )
+    logger.info(
+        f"[SEARCH TIMING] Master NACE lookup: "
+        f"{time.perf_counter() - stage_started:.3f}s | "
+        f"numbers={len(joint_nace_rows)}"
+    )
 
     matches = {}
+    stage_started = time.perf_counter()
     master_identity_index = (
         build_identity_candidate_index(
             masters,
             unresolved_rows,
         )
+    )
+    logger.info(
+        f"[SEARCH TIMING] Master identity index: "
+        f"{time.perf_counter() - stage_started:.3f}s | "
+        f"masters={len(masters)} keys={len(master_identity_index)}"
     )
     stage_started = time.perf_counter()
 
@@ -385,7 +427,11 @@ def find_master_matches(
         # Display variants
         # ----------------------------------------------------
 
-        search_sdo_ids = _row_search_sdo_ids(enrichment_repository, row)
+        search_sdo_ids = _row_search_sdo_ids(
+            enrichment_repository,
+            row,
+            row_sdo_ids_cache,
+        )
         for variant in row[
             "identity"
         ].get(
@@ -441,7 +487,11 @@ def find_master_matches(
                 row["identity"].get("core_number_pattern") or "",
             ) or [normalize_identity_core(core)]
 
-            seen_master_ids = set()
+            seen_master_ids = {
+                getattr(candidate, "id", None)
+                for candidate in candidates
+                if getattr(candidate, "id", None) is not None
+            }
             index_lookups = [
                 (search_sdo_id, request_sdo_name)
                 for search_sdo_id in search_sdo_ids
@@ -519,6 +569,10 @@ def find_master_matches(
             latest_tema_edition = tema_latest_by_sdo.get(row.get("sdo_id"))
             if latest_tema_edition is not None:
                 candidates.append(latest_tema_edition)
+
+        # Same unique set the selector would effectively rank; avoids repeat
+        # scoring work when display and identity paths overlap.
+        candidates = unique_standards(candidates)
 
         with use_candidate_status_map(master_status_map):
             selected = select_master_candidates(

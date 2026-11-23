@@ -237,6 +237,145 @@ class StandardIdentityTests(unittest.TestCase):
         self.assertEqual(identity["core_number"], "500")
         self.assertEqual(identity["designation"], "RP")
 
+    def test_structural_type_prefix_matches_bare_number_without_allowlist(self):
+        """TYPE + dotted number matches bare id; PRC need not be allowlisted."""
+        from app.core.standard_identity import DESIGNATION_TOKENS
+
+        self.assertNotIn("PRC", DESIGNATION_TOKENS)
+        catalogue = parse_identity("ACI", "ACI PRC 364.9 : 2021")
+        bare = parse_identity("ACI", "364.9 : 2021")
+        self.assertEqual(catalogue["designation"], "PRC")
+        self.assertEqual(catalogue["core_number"], "364.9")
+        self.assertEqual(catalogue["year"], 2021)
+        self.assertEqual(bare["core_number"], "364.9")
+        self.assertTrue(
+            identity_matches(bare, catalogue, check_year=True)
+        )
+        # Cross-SDO dotted TYPE printings (same structural rule, not ACI-only).
+        self.assertTrue(
+            identity_matches(
+                parse_identity("ACI", "207.1 : 2021"),
+                parse_identity("ACI", "ACI PRC 207.1 : 2021"),
+                check_year=True,
+            )
+        )
+        other = parse_identity("OTHER", "XYZ 12.3 : 2020")
+        bare_other = parse_identity("OTHER", "12.3")
+        self.assertEqual(other["designation"], "XYZ")
+        self.assertEqual(other["core_number"], bare_other["core_number"])
+        self.assertTrue(
+            identity_matches(bare_other, other, check_year=False)
+        )
+        # Series codes without a dotted body are not type-split.
+        self.assertEqual(
+            parse_identity("NEMA", "BI 50090")["core_number"],
+            "BI50090",
+        )
+        self.assertEqual(
+            parse_identity(
+                "ASME",
+                "PTC 6: 2004 (Reaffirmed 2014) "
+                "Steam Turbines Performance Test Codes",
+            )["core_number"],
+            "PTC6",
+        )
+        # Glued letter-number ids must not be guessed apart.
+        glued = parse_identity("ASTM", "C950")
+        self.assertIsNone(glued["designation"])
+        self.assertEqual(glued["core_number"], "C950")
+        nace = parse_identity("NACE", "MR0175")
+        self.assertIsNone(nace["designation"])
+        self.assertIn("MR0175", nace["core_number"])
+
+    def test_non_api_chapter_qualifier_is_universal(self):
+        """Chapter/Ch is identity via QUALIFIER_RE for any SDO; MPMS stays adapter."""
+        ieee = parse_identity("IEEE", "C37 Chapter 2")
+        self.assertEqual(ieee["qualifier"], "CHAPTER:2")
+        self.assertEqual(ieee["core_number"], "C37")
+        self.assertTrue(
+            identity_matches(
+                parse_identity("IEEE", "C37 CH 2"),
+                ieee,
+                check_year=False,
+            )
+        )
+        from app.core.standard_identity import canonicalize_search_request
+
+        _sdo, number, _id = canonicalize_search_request(
+            "API", "API MPMS Ch. 5.6"
+        )
+        self.assertEqual(number, "API MPMS Chapter 5.6")
+
+    def test_observed_publisher_chain_not_invented_for_bare_number(self):
+        """Observed NF EN ISO chain is kept; bare asks do not invent EN ISO."""
+        from app.core.standard_identity import (
+            _optional_publication_type_prefixes,
+            identity_pattern_prefix,
+            sdo_identifier_prefixes,
+        )
+
+        chained = parse_identity("NF", "NF EN ISO 9001:2015")
+        self.assertEqual(chained["identifier_prefix"], "NF EN ISO")
+        self.assertEqual(chained["core_number"], "9001")
+        self.assertEqual(
+            identity_pattern_prefix("NF", chained["identifier_prefix"]),
+            "NF EN ISO",
+        )
+        bare = parse_identity("NF", "9001")
+        self.assertEqual(bare["identifier_prefix"], "NF")
+        self.assertEqual(
+            identity_pattern_prefix("NF", bare["identifier_prefix"]),
+            "NF",
+        )
+        # Discovery must not invent TR/TS prefixes for ungated SDOs.
+        self.assertEqual(_optional_publication_type_prefixes("ACI"), ())
+        self.assertEqual(_optional_publication_type_prefixes("NF"), ())
+        self.assertIn("IEC TR", _optional_publication_type_prefixes("IEC"))
+        # Alias map is not required for observed chains; NF has no alias row.
+        self.assertEqual(sdo_identifier_prefixes("NF"), ("NF",))
+
+    def test_colon_title_after_part_qualifier_is_removed(self):
+        titled_raw = (
+            "520 (Part I) : Sizing, selection, and installation "
+            "of pressure-relieving devices"
+        )
+        titled = parse_identity("API", titled_raw)
+        bare = parse_identity("API", "520 (Part I)")
+        catalogue = parse_identity("API", "API STD 520-1 : 2020")
+        self.assertEqual(titled["core_number"], "520")
+        self.assertEqual(titled["qualifier"], "PART:1")
+        self.assertEqual(titled["core_number"], bare["core_number"])
+        self.assertEqual(titled["qualifier"], bare["qualifier"])
+        self.assertTrue(
+            identity_matches(titled, catalogue, check_year=False)
+        )
+        unparen = parse_identity(
+            "API",
+            "520 Part I : Sizing, selection, and installation "
+            "of pressure-relieving devices",
+        )
+        self.assertEqual(unparen["core_number"], "520")
+        self.assertEqual(unparen["qualifier"], "PART:1")
+        self.assertTrue(
+            identity_matches(unparen, catalogue, check_year=False)
+        )
+        # Search goes through canonicalize first; Part must survive that rewrite.
+        for source in (
+            titled_raw,
+            "520 (Part I)",
+            "520 Part I",
+            "520 Part I : Sizing, selection, and installation "
+            "of pressure-relieving devices",
+        ):
+            _sdo, cleaned, _id = canonicalize_search_request("API", source)
+            via_canon = parse_identity("API", cleaned)
+            self.assertEqual(via_canon["core_number"], "520", source)
+            self.assertEqual(via_canon["qualifier"], "PART:1", source)
+            self.assertTrue(
+                identity_matches(via_canon, catalogue, check_year=False),
+                source,
+            )
+
     def test_bis_standard_label_and_title_are_removed(self):
         sdo, number, _ = canonicalize_search_request(
             "BIS",
@@ -1354,6 +1493,26 @@ class StandardIdentityTests(unittest.TestCase):
             self.matches("ASTM", "A991/991M", "ASTM A991/A991M : 10")
         )
 
+    def test_unpaired_astm_request_indexes_dual_catalogue_sides(self):
+        # Discovery finds A484/A484M from hint A484, but the candidate must
+        # also be indexed under A484 or the request never joins it.
+        for unpaired, dual in (
+            ("A484", "ASTM A484/A484M : 24b"),
+            ("A 480", "ASTM A480/A480M : 25b"),
+            ("B103", "ASTM B103/B103M : 23"),
+            ("E8", "ASTM E8/E8M : 22"),
+        ):
+            with self.subTest(unpaired=unpaired):
+                catalog = parse_identity("ASTM", dual)
+                indexed = identity_index_cores(
+                    "ASTM",
+                    catalog["core_number"],
+                    catalog.get("core_number_pattern") or "",
+                )
+                request_core = parse_identity("ASTM", unpaired)["core_number"]
+                self.assertIn(request_core, indexed)
+                self.assertTrue(self.matches("ASTM", unpaired, dual))
+
     def test_national_iso_and_shorthand_forms_match(self):
         self.assertTrue(
             self.matches("ASME", "BPVC II D", "ASME BPVC SECTION II PART D")
@@ -1536,6 +1695,89 @@ class StandardIdentityTests(unittest.TestCase):
         matches = DocumentSearchService._select_candidates(candidates, row)
 
         self.assertEqual([candidate.id for candidate in matches], [1, 3])
+
+    def test_api_year_locked_bare_root_returns_only_parts_from_that_year(self):
+        """Option A: API RP 554:2023 finds 554-2:2023, not other parts/years."""
+        row = {
+            "sdo_name": "API",
+            "search_sdo_name": "API",
+            "identity": parse_identity("API", "API RP 554:2023"),
+        }
+        candidates = [
+            SimpleNamespace(
+                id=1,
+                standardyear=2021,
+                standardno="API RP 554-1",
+                display_stdNo="API RP 554-1 : 2021",
+                status_id=1,
+                DocumentAvailability=1,
+            ),
+            SimpleNamespace(
+                id=2,
+                standardyear=2023,
+                standardno="API RP 554-2",
+                display_stdNo="API RP 554-2 : 2023",
+                status_id=1,
+                DocumentAvailability=1,
+            ),
+            SimpleNamespace(
+                id=3,
+                standardyear=2021,
+                standardno="API RP 554-3",
+                display_stdNo="API RP 554-3 : 2021",
+                status_id=1,
+                DocumentAvailability=1,
+            ),
+            SimpleNamespace(
+                id=4,
+                standardyear=2007,
+                standardno="API RP 554",
+                display_stdNo="API RP 554 : 2007",
+                status_id=1,
+                DocumentAvailability=0,
+                BSBInternal=1,
+                BSBESales=0,
+                BSBSubscription=0,
+            ),
+        ]
+
+        local_matches = DocumentSearchService._select_candidates(
+            candidates,
+            row,
+        )
+        master_matches = DocumentSearchService._select_master_candidates(
+            candidates,
+            row,
+        )
+
+        self.assertEqual([candidate.id for candidate in local_matches], [2])
+        self.assertEqual([candidate.id for candidate in master_matches], [2])
+
+    def test_api_year_locked_bare_root_without_year_match_falls_through(self):
+        row = {
+            "sdo_name": "API",
+            "search_sdo_name": "API",
+            "identity": parse_identity("API", "API RP 554:2025"),
+        }
+        candidates = [
+            SimpleNamespace(
+                id=2,
+                standardyear=2023,
+                standardno="API RP 554-2",
+                display_stdNo="API RP 554-2 : 2023",
+                status_id=1,
+                DocumentAvailability=1,
+            ),
+        ]
+
+        matches = DocumentSearchService._select_master_candidates(
+            candidates,
+            row,
+        )
+
+        # No 2025 part: year-locked helper declines; existing part fallback
+        # may still return catalogue parts for assembly (older-version notice).
+        self.assertEqual([candidate.id for candidate in matches], [2])
 
     def test_master_root_falls_back_to_parts_when_root_missing(self):
         row = {
@@ -2878,6 +3120,9 @@ class StandardIdentityTests(unittest.TestCase):
 
             def search_by_sdo_and_display_numbers(self, _pairs):
                 return []
+
+            def search_by_sdo_display_and_standard_numbers(self, _pairs):
+                return [], []
 
             def search_by_sdo_and_normalized_numbers(self, _pairs):
                 return []
