@@ -29,6 +29,14 @@ The small single-standard search uses the same search engine as the document sea
 | `backend/app/database/` | Loads `DATABASE_URL` and provides the SQLAlchemy session used by each request. |
 | `backend/app/core/` | Shared helpers for standard numbers, identity parsing, formatting, retries, and legacy file conversion. |
 
+### Standard identity: structural rules vs adapters
+
+When a search miss is caused by how a designation is printed, prefer fixing it in `backend/app/core/standard_identity.py` with **shared structural rules**, not a new `if sdo == …` branch:
+
+1. **Universal grammar first** — titles after `:`, Part/Chapter/Section, whitespace-separated document types before dotted numbers (`PRC 364.9`), and **observed** publisher chains (`NF EN ISO 9001`) should work for any SDO via helpers such as `_prepare_display`, `_split_designation`, `QUALIFIER_RE`, and `_cores_compatible`.
+2. **Do not grow type allowlists** to recognize a one-off marker; do not invent publisher chains (`ASTM EN ISO`) for bare-number asks. Discovery expansion for `TR`/`TS` stays gated.
+3. **Catalogue spelling adapters only** when the database stores a quirky form (API MPMS chapter wording, ASME BPVC `(M)`/`(C)`, JIS department letters). Keep those as thin, named adapters — not mixed into universal parse logic as new SDO special cases.
+
 ### How a request travels through the code
 
 Think of a request as passing through a short chain:

@@ -1,4 +1,4 @@
-"""Identity-hint candidate discovery for document searches."""
+﻿"""Identity-hint candidate discovery for document searches."""
 
 from app.core.standard_identity import (
     canonicalize_search_request,
